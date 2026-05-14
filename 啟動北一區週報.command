@@ -3,18 +3,29 @@ cd "$(dirname "$0")"
 echo "=== 北一區週報產生器 ==="
 echo ""
 
-# Check Python3
+# ── 自動更新 ──────────────────────────────────────────────────
+if command -v git &>/dev/null && [ -d ".git" ]; then
+  echo "檢查更新中…"
+  if git pull --quiet 2>/dev/null; then
+    echo "已是最新版本。"
+  else
+    echo "（無法連線更新，繼續使用現有版本）"
+  fi
+  echo ""
+fi
+
+# ── 檢查 Python ───────────────────────────────────────────────
 if ! command -v python3 &>/dev/null; then
   echo "[錯誤] 找不到 python3，請先安裝 Python 3。"
   read -p "按 Enter 關閉"
   exit 1
 fi
 
-# Check required packages
-python3 -c "import openpyxl, zeep" 2>/dev/null
+# ── 安裝套件 ──────────────────────────────────────────────────
+python3 -c "import openpyxl, pandas" 2>/dev/null
 if [ $? -ne 0 ]; then
   echo "安裝必要套件中…"
-  pip3 install openpyxl zeep --quiet
+  pip3 install openpyxl pandas --quiet
 fi
 
 echo "啟動伺服器（port 8782）…"

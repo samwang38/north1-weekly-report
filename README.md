@@ -1,13 +1,28 @@
 # 北一區週報產生器
 
-## 使用方式
+## 首次安裝（新同事）
+
+在終端機貼上以下指令，一鍵完成：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/samwang38/north1-weekly-report/main/install.sh | bash
+```
+
+安裝完成後，桌面會出現 `北一區週報-app` 資料夾，雙擊其中的 `啟動北一區週報.command` 即可使用。
+
+---
+
+## 日常使用
 
 1. **連上公司 VPN**（需能連至 192.168.1.177）
 2. 雙擊 `啟動北一區週報.command`
-   - 第一次執行時會自動安裝必要 Python 套件（openpyxl、zeep）
+   - 每次啟動會自動同步最新版本
+   - 第一次執行時會自動安裝必要 Python 套件
 3. 瀏覽器開啟：`http://127.0.0.1:8782/`
 4. 選擇週結束日期（週六），點「產生週報」
 5. 等候約 2 分鐘後，點「下載 Excel」
+
+---
 
 ## 環境需求
 
@@ -26,7 +41,9 @@
 ├── server.py               主程式（HTTP server + 填表邏輯）
 ├── multistore_engine.py    EPB 資料查詢與計算引擎
 ├── EPBReportQuery.java     Java EPB 橋接器原始碼
-├── 啟動北一區週報.command   雙擊啟動腳本
+├── 啟動北一區週報.command   雙擊啟動腳本（含自動更新）
+├── install.sh              一鍵安裝腳本
+├── requirements.txt        Python 套件清單
 ├── data/
 │   └── SAcare對應價目表.xlsx
 ├── template/
