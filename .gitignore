@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.class
+.DS_Store
+downloads/
+*.xlsx.tmp
