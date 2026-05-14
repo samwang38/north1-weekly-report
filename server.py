@@ -408,25 +408,35 @@ def _fill_workbook(wk_end: date, log) -> bytes:
 
     # ── BY店 人員銷售 ─────────────────────────────────────────────
     log('填入 BY店 人員銷售…')
-    from copy import copy as _copy
     from openpyxl.utils import get_column_letter as _gcl
+    from openpyxl.worksheet.cell_range import CellRange as _CellRange
     ws_staff = wb['BY店 人員銷售']
     STAFF_BLOCKS = [('004',1),('005',23),('024',44),('046',67),('054',93),('057',116)]
 
     def _insert_rows_fix(ws, idx, amount):
-        to_fix = []
+        merges = []
         for mr in list(ws.merged_cells.ranges):
             if mr.min_row >= idx:
-                to_fix.append((mr.min_row, mr.max_row, mr.min_col, mr.max_col))
+                merges.append((mr.min_row, mr.max_row, mr.min_col, mr.max_col))
+        heights = {}
+        for r in range(idx, ws.max_row + 1):
+            rd = ws.row_dimensions.get(r)
+            if rd and rd.height:
+                heights[r] = rd.height
         ws.insert_rows(idx, amount)
-        for (min_r, max_r, min_c, max_c) in to_fix:
-            old = f'{_gcl(min_c)}{min_r}:{_gcl(max_c)}{max_r}'
+        for (min_r, max_r, min_c, max_c) in merges:
             try:
-                ws.unmerge_cells(old)
+                ws.merged_cells.remove(
+                    _CellRange(f'{_gcl(min_c)}{min_r}:{_gcl(max_c)}{max_r}'))
             except Exception:
                 pass
+        for (min_r, max_r, min_c, max_c) in merges:
             ws.merge_cells(start_row=min_r+amount, start_column=min_c,
                            end_row=max_r+amount, end_column=max_c)
+        for r in heights:
+            ws.row_dimensions[r].height = None
+        for r, h in heights.items():
+            ws.row_dimensions[r + amount].height = h
 
     _SKIP_LABELS = {
         '員工代碼', '員工名稱', '本週', '月累積', '小計',
