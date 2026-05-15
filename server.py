@@ -408,6 +408,7 @@ def _fill_workbook(wk_end: date, log) -> bytes:
 
     # ── BY店 人員銷售 ─────────────────────────────────────────────
     log('填入 BY店 人員銷售…')
+    from copy import copy as _copy
     from openpyxl.utils import get_column_letter as _gcl
     from openpyxl.worksheet.cell_range import CellRange as _CellRange
     ws_staff = wb['BY店 人員銷售']
