@@ -160,5 +160,30 @@
     show(configCard);
   });
 
+  const trafficStatus = $('trafficStatus');
+  const N1_STORES = 5;   // 北一區有計數器的門市數（羅東用公式不計）
+
+  async function refreshTrafficStatus() {
+    if (!trafficStatus) return;
+    try {
+      const res = await fetch('/api/traffic-status');
+      const d = await res.json();
+      if (d.storeCount > 0) {
+        const ok = d.storeCount >= N1_STORES;
+        trafficStatus.textContent =
+          `🟢 人流已更新：${d.storeCount}/${N1_STORES} 店 · 最新 ${d.latest}` +
+          (d.updated ? ` · 推送於 ${d.updated}` : '') +
+          (ok ? '' : '（門市數不足，請確認 ShopperTrak 已登入並重整）');
+      } else {
+        trafficStatus.textContent =
+          '⚪ 尚未收到人流資料 — 請開啟登入的 ShopperTrak 網頁，插件會自動背景推送（人流欄將留空）';
+      }
+    } catch (e) {
+      trafficStatus.textContent = '人流狀態：無法查詢';
+    }
+  }
+
   loadDefaultDate();
+  refreshTrafficStatus();
+  setInterval(refreshTrafficStatus, 15000);
 })();

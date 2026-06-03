@@ -936,6 +936,23 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(200, {'date': _last_saturday().isoformat()})
             return
 
+        if p.path == '/api/traffic-status':
+            stores = _load_traffic()
+            all_dates = sorted(d for days in stores.values() for d in days)
+            try:
+                with open(TRAFFIC_FILE, encoding='utf-8') as f:
+                    updated = json.load(f).get('updated', '')
+            except Exception:
+                updated = ''
+            self.send_json(200, {
+                'storeCount': len(stores),
+                'codes':      sorted(stores.keys()),
+                'latest':     all_dates[-1] if all_dates else '',
+                'earliest':   all_dates[0] if all_dates else '',
+                'updated':    updated,
+            })
+            return
+
         if p.path == '/api/status':
             job_id = qs.get('jobId', [''])[0]
             with _LOCK:
