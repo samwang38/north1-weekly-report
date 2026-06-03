@@ -715,6 +715,13 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
 
     ws_misc.cell(1,1).value = f'本週其他細項  ·  本週 {_d(WK_START)}~{_d(wk_end)}  |  對照 上週 {_d(PW_START)}~{_d(PW_END)}'
 
+    # 配件區塊小標題（iPhone/iPad/Watch）：上週/本週日期
+    _misc_pw = f'上週 {_d(PW_START)}~{_d(PW_END)}'
+    _misc_wk = f'本週 {_d(WK_START)}~{_d(wk_end)}'
+    for _r, _c_pw, _c_wk in [(21, 2, 12), (31, 2, 13), (41, 2, 7)]:
+        ws_misc.cell(_r, _c_pw).value = _misc_pw
+        ws_misc.cell(_r, _c_wk).value = _misc_wk
+
     def _rep_w(ws, row, la, lb):
         cnt = 0
         for c in range(1, ws.max_column+1):
