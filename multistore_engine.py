@@ -474,9 +474,19 @@ def coupon_stats(df: pd.DataFrame) -> tuple[int, int]:
     return int(give), int(redeem)
 
 
-def coupon_revenue(df: pd.DataFrame) -> int:
-    """禮券金額 = 抵用券 SKU 的 NET 絕對值（兌換金額）"""
-    m = df['存貨代碼'].isin({COUPON_GIVE, COUPON_REDEEM})
+# 禮券（高島屋等百貨禮券折抵）
+C6_VOUCHER       = {6884.0, 6888.0, 6889.0}  # 禮券類別6（負值折抵）
+VOUCHER_EXCL_C3  = 3027.0                      # 排除類別3
+VOUCHER_EXCL_EMP = 'SA999'                     # 排除員工（月底入帳發行，非顧客使用）
+
+
+def voucher_revenue(df: pd.DataFrame) -> int:
+    """禮券金額 = 類別6 ∈ {6884,6888,6889} 的 signed NET 加總後取絕對值。
+    排除 emp_id1='SA999'（月底入帳發行）與 cat3=3027。
+    """
+    m = df['類別6代碼'].isin(C6_VOUCHER) & (df['類別3代碼'] != VOUCHER_EXCL_C3)
+    if '員工代碼' in df.columns:
+        m &= (df['員工代碼'] != VOUCHER_EXCL_EMP)
     return int(abs(df.loc[m, 'NET'].sum()))
 
 
@@ -524,7 +534,7 @@ def calc_store_metrics(df: pd.DataFrame, start: date, end: date,
         'sa_watch':      sacare_units(d, C6_SA['watch'], sa_codes),
         'sa_airpods':    sacare_units(d, C6_SA['airpods'], sa_codes),
         'airpods_units': airpods_host_units(d),
-        'coupon_rev':    coupon_revenue(d),
+        'coupon_rev':    voucher_revenue(d),   # 禮券金額（高島屋禮券：類別6 6884/6888/6889）
     }
 
 
