@@ -834,6 +834,9 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
         elif c in {3,6,9,12,15}: ws_ly.cell(13,c).value = cy_ymd
     ws_ly.cell(22,1).value = f'{MTD_START.year}\n{mtd_lbl}'
     ws_ly.cell(31,1).value = f'{LYMO_START.year}\n{ly_lbl}'
+    # 第3列右半（3PP搭售率/SA Care搭售率/禮券金額）年份標籤：24/26/28=去年, 25/27/29=今年
+    for c in (24, 26, 28): ws_ly.cell(3, c).value = ly_ymd
+    for c in (25, 27, 29): ws_ly.cell(3, c).value = cy_ymd
 
     ytd_ly_lbl=f'{_d(YTD_S_LY)}~{_d(YTD_E_LY)}'; ytd_cy_lbl=f'{_d(YTD_S_CY)}~{_d(YTD_E_CY)}'
     for c in range(1, ws_yoy.max_column+1):
@@ -851,6 +854,9 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
         elif c in {3,6,9,12,15}: ws_yoy.cell(13,c).value = ytd_cy_ymd
     ws_yoy.cell(22,1).value = f'{YTD_S_CY.year}\n{ytd_cy_lbl}'
     ws_yoy.cell(31,1).value = f'{YTD_S_LY.year}\n{ytd_ly_lbl}'
+    # 第3列右半（3PP搭售率/SA Care搭售率/禮券金額）年份標籤：24/26/28=去年, 25/27/29=今年
+    for c in (24, 26, 28): ws_yoy.cell(3, c).value = ytd_ly_ymd
+    for c in (25, 27, 29): ws_yoy.cell(3, c).value = ytd_cy_ymd
 
     log('儲存 Excel…')
     buf = BytesIO()
