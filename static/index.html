@@ -16,13 +16,9 @@
     <section class="card" id="configCard">
       <h2>設定</h2>
 
-      <div class="form-row" style="align-items:center;gap:16px;">
-        <label style="margin:0;font-weight:normal;">
-          <input type="radio" name="dateMode" value="auto" checked style="width:auto;margin:0 4px 0 0;">自動（最近完整週）
-        </label>
-        <label style="margin:0;font-weight:normal;">
-          <input type="radio" name="dateMode" value="custom" style="width:auto;margin:0 4px 0 0;">自訂日期
-        </label>
+      <div class="opt-row">
+        <label><input type="radio" name="dateMode" value="auto" checked>自動（最近完整週）</label>
+        <label><input type="radio" name="dateMode" value="custom">自訂日期</label>
       </div>
 
       <!-- 自動模式 -->
@@ -32,9 +28,8 @@
           <input type="date" id="weekEnd">
         </div>
         <p class="hint" id="weekRangeHint"></p>
-        <div class="form-row" style="align-items:center;gap:8px;">
-          <input type="checkbox" id="useFullMonth" style="width:auto;margin:0;">
-          <label for="useFullMonth" style="margin:0;font-weight:normal;">月累積延伸到月底（本月/去年同期/年累積 用完整月）</label>
+        <div class="opt-row">
+          <label for="useFullMonth"><input type="checkbox" id="useFullMonth">月累積延伸到月底（本月/去年同期/年累積 用完整月）</label>
         </div>
       </div>
 

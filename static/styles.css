@@ -150,3 +150,8 @@ h1 { font-size: 24px; font-weight: 700; }
 .custom-grid .cp-row label { margin: 0; font-weight: normal; }
 .custom-grid .cp-row input[type="date"] { margin: 0; }
 .custom-grid .cp-sep { text-align: center; color: #888; }
+
+/* 模式選項 / 勾選列：橫向靠左 */
+.opt-row { display: flex; flex-direction: row; align-items: center; gap: 20px; margin-bottom: 14px; }
+.opt-row label { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; color: var(--text); cursor: pointer; }
+.opt-row input { width: auto; margin: 0; }
