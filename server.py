@@ -31,6 +31,12 @@ def _last_saturday() -> date:
 def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
     from openpyxl import load_workbook as _lw
     from openpyxl.utils import get_column_letter as _gcl
+    from openpyxl.formatting.rule import CellIsRule
+    from openpyxl.styles import Font as _Font
+
+    # 保固合計搭售率目標（合計搭售率欄 → 目標%）：未達標轉紅字
+    WARRANTY_TARGETS = {7: 0.60, 13: 0.40, 19: 0.50, 25: 0.19, 32: 0.35}
+    _RED_FONT = _Font(color='FFFF0000')
 
     WK_START = wk_end - timedelta(days=6)
     PW_END   = WK_START - timedelta(days=1)
@@ -249,6 +255,13 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
             _fml_rate(ws, r, 31, 30, 27)
             ws.cell(r,32).value = f'=IF(AA{r}=0,0,(AB{r}+AD{r})/AA{r})'
             ws.cell(r,32).number_format = FMT_PCT
+        # 合計搭售率未達目標 → 紅字（條件式格式，依儲存格值動態套用）
+        r_end = row_start + len(rows_stores) - 1
+        for col, tgt in WARRANTY_TARGETS.items():
+            col_l = _gcl(col)
+            ws.conditional_formatting.add(
+                f'{col_l}{row_start}:{col_l}{r_end}',
+                CellIsRule(operator='lessThan', formula=[str(tgt)], font=_RED_FONT))
 
     def fill_units(ws, row_start, pa, pb):
         for ri, code in enumerate(rows_stores):
