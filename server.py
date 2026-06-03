@@ -11,6 +11,7 @@ ROOT         = Path(__file__).resolve().parent
 STATIC_ROOT  = ROOT / 'static'
 TEMPLATE     = ROOT / 'template' / '北一區週報_優化.xlsx'
 SA_FILE      = ROOT / 'data' / 'SAcare對應價目表.xlsx'
+TRAFFIC_FILE = ROOT / 'data' / 'traffic_cache.json'
 
 sys.path.insert(0, str(ROOT))
 import multistore_engine as eng
@@ -18,6 +19,30 @@ from openpyxl import load_workbook
 
 JOBS = {}
 _LOCK = threading.Lock()
+
+
+# ─── 人流快取（插件背景推送）─────────────────────────────────
+def _load_traffic() -> dict:
+    """讀取人流快取 → {storeCode: {'YYYY-MM-DD': visitors}}"""
+    try:
+        with open(TRAFFIC_FILE, encoding='utf-8') as f:
+            return json.load(f).get('stores', {})
+    except Exception:
+        return {}
+
+
+def _save_traffic(stores: dict):
+    TRAFFIC_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(TRAFFIC_FILE, 'w', encoding='utf-8') as f:
+        json.dump({'updated': time.strftime('%Y-%m-%d %H:%M:%S'),
+                   'stores': stores}, f, ensure_ascii=False)
+
+
+def _traffic_sum(stores: dict, code: str, start: date, end: date) -> int:
+    """加總某店在 [start, end] 區間的每日人流"""
+    days = stores.get(code, {})
+    s, e = start.isoformat(), end.isoformat()
+    return int(sum(v for d, v in days.items() if s <= d <= e))
 
 
 # ─── 預設本週結束日（最近一個週六）─────────────────────────────
@@ -123,6 +148,16 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
         MISC_WK[code]  = eng.calc_misc_metrics(df_cy, WK_START, wk_end,    sc, sa_prices)
         MISC_PW[code]  = eng.calc_misc_metrics(df_cy, PW_START, PW_END,    sc, sa_prices)
         MISC_MTD[code] = eng.calc_misc_metrics(df_cy, MTD_START, MTD_END,  sc, sa_prices)
+
+    # 人流：依期間加總每店每日人流（羅東無計數器，維持公式不填）
+    _traffic = _load_traffic()
+    TRAFFIC = {}
+    for period, (df, s, e) in PERIODS.items():
+        TRAFFIC[period] = {c: _traffic_sum(_traffic, c, s, e) for c in STORE_CODES}
+    if _traffic:
+        log(f'人流快取：{len(_traffic)} 店有資料')
+    else:
+        log('人流快取：無（人流欄留空，可由插件背景推送）')
 
     log('指標計算完成，載入範本…')
     wb = _lw(str(TEMPLATE))
@@ -297,7 +332,12 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
                 # Total：人流加總
                 _fml_sum(ws, r, 19, row_start, store_last)
                 _fml_sum(ws, r, 22, row_start, store_last)
-            # （其餘門市人流為手填，保留空白）
+            else:
+                # 5 店：有人流快取就填，沒有就留空白（手填）
+                ta = TRAFFIC[pa].get(code, 0)
+                tb = TRAFFIC[pb].get(code, 0)
+                if ta: _set(ws, r, 19, ta)
+                if tb: _set(ws, r, 22, tb)
             # 提袋率 = 成交筆數 / 人流
             _fml_rate(ws, r, 20, 18, 19)         # T = R/S
             _fml_rate(ws, r, 23, 21, 22)         # W = U/V
@@ -856,7 +896,14 @@ class Handler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
         super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
 
     def send_json(self, status, data):
         body = json.dumps(data, ensure_ascii=False).encode('utf-8')
@@ -936,6 +983,27 @@ class Handler(SimpleHTTPRequestHandler):
                              daemon=True).start()
             self.send_json(200, {'jobId': job_id})
             return
+
+        if p.path == '/api/traffic':
+            # 插件背景推送人流：{ "stores": { "004": {"2026-05-24": 123, ...}, ... } }
+            try:
+                payload = self.read_body()
+                stores  = payload.get('stores', {})
+                if not isinstance(stores, dict):
+                    raise ValueError('stores 格式錯誤')
+                # 合併（同店同日覆寫，保留其他日期）
+                cur = _load_traffic()
+                for code, days in stores.items():
+                    cur.setdefault(str(code), {}).update(
+                        {str(d): int(v) for d, v in days.items()})
+                _save_traffic(cur)
+                n_days = sum(len(v) for v in stores.values())
+            except Exception as e:
+                self.send_json(400, {'error': f'人流資料錯誤: {e}'})
+                return
+            self.send_json(200, {'ok': True, 'stores': len(stores), 'days': n_days})
+            return
+
         self.send_json(404, {'error': 'Not found'})
 
 
