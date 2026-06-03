@@ -283,11 +283,30 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
             _set(ws, r, 14, ma['airpods_units'])
             _set(ws, r, 15, mb['airpods_units'])
             _fml_pct(ws, r, 16, 15, 14)
-            _set(ws, r, 18, ma['txn_count'])
-            _set(ws, r, 21, mb['txn_count'])
-            # 平均客單價 = 業績/筆數
-            ws.cell(r,26).value = f'=IF(R{r}=0,0,0)'  # 上期業績欄（手填或另查）
-            # 直接寫入計算值（txn 平均客單不在主表格欄位中）
+            _set(ws, r, 18, ma['txn_count'])     # 成交筆數 上期 (R)
+            _set(ws, r, 21, mb['txn_count'])     # 成交筆數 本期 (U)
+            # ── 人流 (S=上期, V=本期) ──
+            store_last = row_start + len(rows_stores) - 2   # 最後一個門市列（羅東）
+            if code == '057':
+                # 羅東無計數器：人流 = 成交筆數 × 0.85 / 0.3（去小數）
+                ws.cell(r, 19).value = f'=ROUND(R{r}*0.85/0.3,0)'
+                ws.cell(r, 19).number_format = FMT_INT
+                ws.cell(r, 22).value = f'=ROUND(U{r}*0.85/0.3,0)'
+                ws.cell(r, 22).number_format = FMT_INT
+            elif code == 'ALL':
+                # Total：人流加總
+                _fml_sum(ws, r, 19, row_start, store_last)
+                _fml_sum(ws, r, 22, row_start, store_last)
+            # （其餘門市人流為手填，保留空白）
+            # 提袋率 = 成交筆數 / 人流
+            _fml_rate(ws, r, 20, 18, 19)         # T = R/S
+            _fml_rate(ws, r, 23, 21, 22)         # W = U/V
+            # 差異人流 = 本期人流 - 上期人流
+            ws.cell(r, 24).value = f'=V{r}-S{r}'
+            ws.cell(r, 24).number_format = FMT_INT
+            # 較上期比 = (本期-上期)/上期
+            _fml_pct(ws, r, 25, 22, 19)          # Y = (V-S)/S
+            # ── 平均單價 = 業績/筆數 ──
             avg_a = rate(ma['total_excl_sa'], ma['txn_count'])
             avg_b = rate(mb['total_excl_sa'], mb['txn_count'])
             _set(ws, r, 26, round(avg_a))
@@ -363,6 +382,14 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
             ws.cell(r, 22).number_format = FMT_INT
             ws.cell(r, 23).value = f'={_gcl(8)}{r}-{_gcl(7)}{r}'
             ws.cell(r, 23).number_format = FMT_INT
+            # SA Care差異 = 本月 - 上月 (K-J)
+            ws.cell(r, 24).value = f'={_gcl(11)}{r}-{_gcl(10)}{r}'
+            ws.cell(r, 24).number_format = FMT_INT
+            # AC差異 = 本月 - 上月 (N-M)
+            ws.cell(r, 25).value = f'={_gcl(14)}{r}-{_gcl(13)}{r}'
+            ws.cell(r, 25).number_format = FMT_INT
+            # 達成率 = 本月總業績 / 本月目標 (Q/B)
+            _fml_rate(ws, r, 3, 17, 2)
             _fml_rate(ws, r, 26, 7, 4)
             _fml_rate(ws, r, 27, 8, 5)
             _fml_rate(ws, r, 28, 10, 4)
