@@ -117,6 +117,7 @@
   generateBtn.addEventListener('click', async () => {
     const wkEnd = weekEndInput.value;
     if (!wkEnd) { alert('請選擇週結束日期'); return; }
+    const useFullMonth = !!document.getElementById('useFullMonth')?.checked;
 
     logBox.innerHTML = '';
     seenCount = 0;
@@ -128,7 +129,7 @@
       const res  = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ week_end: wkEnd }),
+        body: JSON.stringify({ week_end: wkEnd, useFullMonth }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {

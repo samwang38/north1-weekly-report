@@ -318,7 +318,7 @@ def load_from_epb(
         f" l.emp_id1, coalesce(e.name, l.emp_id1) as emp_name,"
         f" l.stk_id, l.name as stk_name, l.stk_qty,"
         f" l.line_total_net, l.line_tax, l.trn_cost_price, l.cost_price,"
-        f" l.brand_id, l.cat1_id, l.cat3_id, l.cat4_id, l.cat6_id, l.disc_num"
+        f" l.brand_id, l.cat1_id, l.cat3_id, l.cat4_id, l.cat5_id, l.cat6_id, l.disc_num"
         f" from poslinev_bi l"
         f" left join (select emp_id, name from (select emp_id, name,"
         f" row_number() over (partition by emp_id order by lengthb(name) desc) rn"
@@ -360,6 +360,7 @@ def load_from_epb(
         '類別1代碼':       pd.to_numeric(raw['CAT1_ID'], errors='coerce'),
         '類別3代碼':       pd.to_numeric(raw['CAT3_ID'], errors='coerce'),
         '類別4代碼':       pd.to_numeric(raw['CAT4_ID'], errors='coerce'),
+        '類別5代碼':       pd.to_numeric(raw['CAT5_ID'], errors='coerce'),
         '類別6代碼':       pd.to_numeric(raw['CAT6_ID'], errors='coerce'),
         '品牌代碼':        pd.to_numeric(raw['BRAND_ID'], errors='coerce'),
         '地點代碼':        raw['SHOP_ID'].astype(str).str.strip().str.zfill(3),
@@ -544,6 +545,22 @@ C6_WATCH_BAND   = {6506.0}                           # Watch 錶帶
 C4_IPAD_ACC     = {4010.0, 4011.0}                  # iPad 配件 類別4
 
 
+SACARE_CHECKNEW_CAT5 = 5807.0  # 090CaC SHOPPOSB 類別5：SACare 檢測新機
+
+
+def sacare_checknew_units(df: pd.DataFrame, c6_set: set[float], sa_codes: set[str]) -> int:
+    """SACare 檢測新機台數：cat5=5807 + 類別6 ∈ c6_set + 存貨代碼 ∈ SA 價目表"""
+    if '類別5代碼' not in df.columns:
+        # 無 cat5 欄位時（例如 800AB 路徑）退回舊邏輯
+        return sacare_units(df, c6_set, sa_codes)
+    m = ((df['類別5代碼'] == SACARE_CHECKNEW_CAT5) &
+         df['類別6代碼'].isin(c6_set) &
+         df['存貨代碼'].isin(sa_codes))
+    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
+    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
+    return int(sale - ret)
+
+
 def recycle_units(df: pd.DataFrame, sku: str) -> int:
     """回收件數：環保回收(99200234) / 線材回收(99200251) 等 SKU"""
     m = df['存貨代碼'] == sku
@@ -635,14 +652,14 @@ def calc_misc_metrics(df: pd.DataFrame, start: date, end: date,
     sa_codes = set(sa_prices.keys())
     d = filter_period(df, start, end, store_code)
 
-    # SAcare 檢測新機（按裝置別）
-    sa_mac     = sacare_units(d, C6_SA['cpu'],     sa_codes)
-    sa_iphone  = sacare_units(d, C6_SA['iphone'],  sa_codes)
-    sa_ipad    = sacare_units(d, C6_SA['ipad'],    sa_codes)
-    sa_watch   = sacare_units(d, C6_SA['watch'],   sa_codes)
-    sa_airpods = sacare_units(d, C6_SA['airpods'], sa_codes)
+    # SAcare 檢測新機（按裝置別，使用 cat5=5807 篩選）
+    sa_mac     = sacare_checknew_units(d, C6_SA['cpu'],     sa_codes)
+    sa_iphone  = sacare_checknew_units(d, C6_SA['iphone'],  sa_codes)
+    sa_ipad    = sacare_checknew_units(d, C6_SA['ipad'],    sa_codes)
+    sa_watch   = sacare_checknew_units(d, C6_SA['watch'],   sa_codes)
+    sa_airpods = sacare_checknew_units(d, C6_SA['airpods'], sa_codes)
 
-    # 活動使用
+    # 活動使用（抵用券贈出/兌換：99901687/99901689；環保/線材回收：99200234/99200251）
     coupon_give, coupon_redeem = coupon_stats(d)
     eco   = recycle_units(d, '99200234')
     cable = recycle_units(d, '99200251')

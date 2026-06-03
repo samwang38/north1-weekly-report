@@ -28,21 +28,26 @@ def _last_saturday() -> date:
 
 
 # ─── 核心填充邏輯 ─────────────────────────────────────────────
-def _fill_workbook(wk_end: date, log) -> bytes:
+def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
     from openpyxl import load_workbook as _lw
+    from openpyxl.utils import get_column_letter as _gcl
 
     WK_START = wk_end - timedelta(days=6)
     PW_END   = WK_START - timedelta(days=1)
     PW_START = PW_END - timedelta(days=6)
 
-    # MTD / PM_SAME（跨月邏輯）
+    # MTD（跨月時用 WK_START 那個月；use_full_month 時延伸到月底）
     if WK_START.month != wk_end.month:
         MTD_START = date(WK_START.year, WK_START.month, 1)
         MTD_END   = date(WK_START.year, WK_START.month,
                          monthrange(WK_START.year, WK_START.month)[1])
     else:
         MTD_START = date(wk_end.year, wk_end.month, 1)
-        MTD_END   = wk_end
+        if use_full_month:
+            MTD_END = date(wk_end.year, wk_end.month,
+                           monthrange(wk_end.year, wk_end.month)[1])
+        else:
+            MTD_END = wk_end
 
     _pm_y  = MTD_START.year if MTD_START.month > 1 else MTD_START.year - 1
     _pm_m  = MTD_START.month - 1 if MTD_START.month > 1 else 12
@@ -57,7 +62,7 @@ def _fill_workbook(wk_end: date, log) -> bytes:
 
     LYW_START = WK_START - timedelta(weeks=52)
     LYW_END   = wk_end   - timedelta(weeks=52)
-    YTD_S_CY  = date(wk_end.year, 1, 1);  YTD_E_CY = wk_end
+    YTD_S_CY  = date(MTD_END.year, 1, 1);  YTD_E_CY = MTD_END
     YTD_S_LY  = date(LYMO_END.year, 1, 1); YTD_E_LY = LYMO_END
 
     STORE_CODES = list(eng.STORES.keys())
@@ -116,151 +121,206 @@ def _fill_workbook(wk_end: date, log) -> bytes:
     log('指標計算完成，載入範本…')
     wb = _lw(str(TEMPLATE))
 
+    # ── 格式輔助 ──────────────────────────────────────────────────
+    FMT_INT = '#,##0'
+    FMT_PCT = '0.00%'
+
+    def _set(ws, r, c, val, fmt=FMT_INT):
+        cell = ws.cell(r, c)
+        cell.value = val
+        cell.number_format = fmt
+
+    def _fml_diff(ws, r, c_new, c_old, r_ref=None):
+        """差值公式：=NEW-OLD，整數格式"""
+        rr = r_ref or r
+        cell = ws.cell(r, c_new + 1 if False else c_new)
+        # 直接用 offset 計算 formula col
+        new_ref = f'{_gcl(c_new)}{rr}'
+        old_ref = f'{_gcl(c_old)}{rr}'
+        ws.cell(r, c_new).value = f'={new_ref}-{old_ref}'
+        ws.cell(r, c_new).number_format = FMT_INT
+
+    def _fml_pct(ws, r, c_out, c_new, c_old):
+        """百分比公式：=(NEW-OLD)/ABS(OLD)，百分比格式"""
+        new_ref = f'{_gcl(c_new)}{r}'
+        old_ref = f'{_gcl(c_old)}{r}'
+        ws.cell(r, c_out).value = f'=IF({old_ref}=0,0,({new_ref}-{old_ref})/ABS({old_ref}))'
+        ws.cell(r, c_out).number_format = FMT_PCT
+
+    def _fml_rate(ws, r, c_out, c_num, c_den):
+        """比率公式：=NUM/DEN，百分比格式"""
+        num_ref = f'{_gcl(c_num)}{r}'
+        den_ref = f'{_gcl(c_den)}{r}'
+        ws.cell(r, c_out).value = f'=IF({den_ref}=0,0,{num_ref}/{den_ref})'
+        ws.cell(r, c_out).number_format = FMT_PCT
+
+    def _fml_sum(ws, r_total, c, r_start, r_end):
+        """SUM 公式：加總 r_start~r_end 列，整數格式"""
+        col_l = _gcl(c)
+        ws.cell(r_total, c).value = f'=SUM({col_l}{r_start}:{col_l}{r_end})'
+        ws.cell(r_total, c).number_format = FMT_INT
+
     # ── helpers ──────────────────────────────────────────────────
     def fill_acc_section(ws, row_start, col_offset, code):
+        n = len(eng.C4_ACCESSORY)
         for i, (c4, _) in enumerate(eng.C4_ACCESSORY):
             r = row_start + i
-            pw_v     = A['pw'][code].get(c4, 0)
-            wk_v     = A['wk'][code].get(c4, 0)
-            mtd_v    = A['mtd'][code].get(c4, 0)
-            pm_v     = A['pm'][code].get(c4, 0)
-            lyw_v    = A['lyw'][code].get(c4, 0)
-            ytd_ly_v = A['ytd_ly'][code].get(c4, 0)
-            ytd_cy_v = A['ytd_cy'][code].get(c4, 0)
-            ws.cell(r, col_offset+3).value  = pw_v
-            ws.cell(r, col_offset+4).value  = wk_v
-            ws.cell(r, col_offset+5).value  = wk_v - pw_v
-            ws.cell(r, col_offset+6).value  = pct(wk_v, pw_v)
-            ws.cell(r, col_offset+7).value  = mtd_v
-            ws.cell(r, col_offset+8).value  = pm_v
-            ws.cell(r, col_offset+9).value  = mtd_v - pm_v
-            ws.cell(r, col_offset+10).value = pct(mtd_v, pm_v)
-            ws.cell(r, col_offset+11).value = lyw_v
-            ws.cell(r, col_offset+12).value = wk_v - lyw_v
-            ws.cell(r, col_offset+13).value = pct(wk_v, lyw_v)
-            ws.cell(r, col_offset+14).value = ytd_ly_v
-            ws.cell(r, col_offset+15).value = ytd_cy_v
-            ws.cell(r, col_offset+16).value = ytd_cy_v - ytd_ly_v
-            ws.cell(r, col_offset+17).value = pct(ytd_cy_v, ytd_ly_v)
-        total_r = row_start + len(eng.C4_ACCESSORY)
-        for off, p in [(3,'pw'),(4,'wk'),(7,'mtd'),(8,'pm'),
-                       (11,'lyw'),(14,'ytd_ly'),(15,'ytd_cy')]:
-            ws.cell(total_r, col_offset+off).value = sum(A[p][code].values())
-        pw_t = sum(A['pw'][code].values());  wk_t = sum(A['wk'][code].values())
-        mtd_t= sum(A['mtd'][code].values()); pm_t = sum(A['pm'][code].values())
-        lyw_t= sum(A['lyw'][code].values())
-        ly_t = sum(A['ytd_ly'][code].values()); cy_t = sum(A['ytd_cy'][code].values())
-        ws.cell(total_r, col_offset+5).value  = wk_t - pw_t
-        ws.cell(total_r, col_offset+6).value  = pct(wk_t, pw_t)
-        ws.cell(total_r, col_offset+9).value  = mtd_t - pm_t
-        ws.cell(total_r, col_offset+10).value = pct(mtd_t, pm_t)
-        ws.cell(total_r, col_offset+12).value = wk_t - lyw_t
-        ws.cell(total_r, col_offset+13).value = pct(wk_t, lyw_t)
-        ws.cell(total_r, col_offset+16).value = cy_t - ly_t
-        ws.cell(total_r, col_offset+17).value = pct(cy_t, ly_t)
+            o = col_offset  # shorthand
+            _set(ws, r, o+3,  A['pw'][code].get(c4, 0))
+            _set(ws, r, o+4,  A['wk'][code].get(c4, 0))
+            _set(ws, r, o+7,  A['mtd'][code].get(c4, 0))
+            _set(ws, r, o+8,  A['pm'][code].get(c4, 0))
+            _set(ws, r, o+11, A['lyw'][code].get(c4, 0))
+            _set(ws, r, o+14, A['ytd_ly'][code].get(c4, 0))
+            _set(ws, r, o+15, A['ytd_cy'][code].get(c4, 0))
+            # 差值與百分比→公式
+            ws.cell(r, o+5).value = f'={_gcl(o+4)}{r}-{_gcl(o+3)}{r}'
+            ws.cell(r, o+5).number_format = FMT_INT
+            _fml_pct(ws, r, o+6,  o+4, o+3)
+            ws.cell(r, o+9).value = f'={_gcl(o+7)}{r}-{_gcl(o+8)}{r}'
+            ws.cell(r, o+9).number_format = FMT_INT
+            _fml_pct(ws, r, o+10, o+7, o+8)
+            ws.cell(r, o+12).value = f'={_gcl(o+4)}{r}-{_gcl(o+11)}{r}'
+            ws.cell(r, o+12).number_format = FMT_INT
+            _fml_pct(ws, r, o+13, o+4, o+11)
+            ws.cell(r, o+16).value = f'={_gcl(o+15)}{r}-{_gcl(o+14)}{r}'
+            ws.cell(r, o+16).number_format = FMT_INT
+            _fml_pct(ws, r, o+17, o+15, o+14)
+
+        total_r = row_start + n
+        r_s = row_start; r_e = row_start + n - 1
+        for off in [3, 4, 7, 8, 11, 14, 15]:
+            _fml_sum(ws, total_r, col_offset+off, r_s, r_e)
+        o = col_offset
+        ws.cell(total_r, o+5).value = f'={_gcl(o+4)}{total_r}-{_gcl(o+3)}{total_r}'
+        ws.cell(total_r, o+5).number_format = FMT_INT
+        _fml_pct(ws, total_r, o+6,  o+4, o+3)
+        ws.cell(total_r, o+9).value = f'={_gcl(o+7)}{total_r}-{_gcl(o+8)}{total_r}'
+        ws.cell(total_r, o+9).number_format = FMT_INT
+        _fml_pct(ws, total_r, o+10, o+7, o+8)
+        ws.cell(total_r, o+12).value = f'={_gcl(o+4)}{total_r}-{_gcl(o+11)}{total_r}'
+        ws.cell(total_r, o+12).number_format = FMT_INT
+        _fml_pct(ws, total_r, o+13, o+4, o+11)
+        ws.cell(total_r, o+16).value = f'={_gcl(o+15)}{total_r}-{_gcl(o+14)}{total_r}'
+        ws.cell(total_r, o+16).number_format = FMT_INT
+        _fml_pct(ws, total_r, o+17, o+15, o+14)
 
     def fill_acpp(ws, row_start, period):
         for ri, code in enumerate(rows_stores):
             r = row_start + ri
             m = M[period][code]
             ws.cell(r, 1).value = eng.STORES.get(code, 'Total')
-            ws.cell(r, 2).value = m['cpu_units']
-            ws.cell(r, 3).value = m['acpp_mac']
-            ws.cell(r, 4).value = rate(m['acpp_mac'], m['cpu_units'])
-            ws.cell(r, 5).value = m['sa_cpu']
-            ws.cell(r, 6).value = rate(m['sa_cpu'], m['cpu_units'])
-            ws.cell(r, 7).value = rate(m['acpp_mac']+m['sa_cpu'], m['cpu_units'])
-            ws.cell(r, 8).value = m['watch_units']
-            ws.cell(r, 9).value = m['acpp_watch']
-            ws.cell(r,10).value = rate(m['acpp_watch'], m['watch_units'])
-            ws.cell(r,11).value = m['sa_watch']
-            ws.cell(r,12).value = rate(m['sa_watch'], m['watch_units'])
-            ws.cell(r,13).value = rate(m['acpp_watch']+m['sa_watch'], m['watch_units'])
-            ws.cell(r,14).value = m['ipad_units']
-            ws.cell(r,15).value = m['acpp_ipad']
-            ws.cell(r,16).value = rate(m['acpp_ipad'], m['ipad_units'])
-            ws.cell(r,17).value = m['sa_ipad']
-            ws.cell(r,18).value = rate(m['sa_ipad'], m['ipad_units'])
-            ws.cell(r,19).value = rate(m['acpp_ipad']+m['sa_ipad'], m['ipad_units'])
-            ws.cell(r,20).value = m['iphone_units']
-            ws.cell(r,21).value = m['acpp_iphone']
-            ws.cell(r,22).value = rate(m['acpp_iphone'], m['iphone_units'])
-            ws.cell(r,23).value = m['sa_iphone']
-            ws.cell(r,24).value = rate(m['sa_iphone'], m['iphone_units'])
-            ws.cell(r,25).value = rate(m['acpp_iphone']+m['sa_iphone'], m['iphone_units'])
-            ios_d = m['iphone_units']+m['ipad_units']
-            ios_n = m['acpp_iphone']+m['acpp_ipad']+m['sa_iphone']+m['sa_ipad']
-            ws.cell(r,26).value = rate(ios_n, ios_d)
-            ws.cell(r,27).value = m['airpods_units']
-            ws.cell(r,28).value = m['acpp_airpods']
-            ws.cell(r,29).value = rate(m['acpp_airpods'], m['airpods_units'])
-            ws.cell(r,30).value = m['sa_airpods']
-            ws.cell(r,31).value = rate(m['sa_airpods'], m['airpods_units'])
-            ws.cell(r,32).value = rate(m['acpp_airpods']+m['sa_airpods'], m['airpods_units'])
+            _set(ws, r,  2, m['cpu_units'])
+            _set(ws, r,  3, m['acpp_mac'])
+            _fml_rate(ws, r,  4, 3, 2)
+            _set(ws, r,  5, m['sa_cpu'])
+            _fml_rate(ws, r,  6, 5, 2)
+            # col7: (ACPP+SA)/cpu = (col3+col5)/col2
+            ws.cell(r, 7).value = f'=IF(B{r}=0,0,(C{r}+E{r})/B{r})'
+            ws.cell(r, 7).number_format = FMT_PCT
+            _set(ws, r,  8, m['watch_units'])
+            _set(ws, r,  9, m['acpp_watch'])
+            _fml_rate(ws, r, 10, 9, 8)
+            _set(ws, r, 11, m['sa_watch'])
+            _fml_rate(ws, r, 12, 11, 8)
+            ws.cell(r,13).value = f'=IF(H{r}=0,0,(I{r}+K{r})/H{r})'
+            ws.cell(r,13).number_format = FMT_PCT
+            _set(ws, r, 14, m['ipad_units'])
+            _set(ws, r, 15, m['acpp_ipad'])
+            _fml_rate(ws, r, 16, 15, 14)
+            _set(ws, r, 17, m['sa_ipad'])
+            _fml_rate(ws, r, 18, 17, 14)
+            ws.cell(r,19).value = f'=IF(N{r}=0,0,(O{r}+Q{r})/N{r})'
+            ws.cell(r,19).number_format = FMT_PCT
+            _set(ws, r, 20, m['iphone_units'])
+            _set(ws, r, 21, m['acpp_iphone'])
+            _fml_rate(ws, r, 22, 21, 20)
+            _set(ws, r, 23, m['sa_iphone'])
+            _fml_rate(ws, r, 24, 23, 20)
+            ws.cell(r,25).value = f'=IF(T{r}=0,0,(U{r}+W{r})/T{r})'
+            ws.cell(r,25).number_format = FMT_PCT
+            # col26: iOS搭售率 = (iPhone+iPad ACPP+SA) / (iPhone+iPad台數)
+            ws.cell(r,26).value = f'=IF(T{r}+N{r}=0,0,(U{r}+W{r}+O{r}+Q{r})/(T{r}+N{r}))'
+            ws.cell(r,26).number_format = FMT_PCT
+            _set(ws, r, 27, m['airpods_units'])
+            _set(ws, r, 28, m['acpp_airpods'])
+            _fml_rate(ws, r, 29, 28, 27)
+            _set(ws, r, 30, m['sa_airpods'])
+            _fml_rate(ws, r, 31, 30, 27)
+            ws.cell(r,32).value = f'=IF(AA{r}=0,0,(AB{r}+AD{r})/AA{r})'
+            ws.cell(r,32).number_format = FMT_PCT
 
     def fill_units(ws, row_start, pa, pb):
         for ri, code in enumerate(rows_stores):
             r = row_start + ri
             ma = M[pa][code]; mb = M[pb][code]
             ws.cell(r, 1).value = eng.STORES.get(code, 'Total')
-            ws.cell(r, 2).value = ma['cpu_units']
-            ws.cell(r, 3).value = mb['cpu_units']
-            ws.cell(r, 4).value = pct(mb['cpu_units'], ma['cpu_units'])
-            ws.cell(r, 5).value = ma['ipad_units']
-            ws.cell(r, 6).value = mb['ipad_units']
-            ws.cell(r, 7).value = pct(mb['ipad_units'], ma['ipad_units'])
-            ws.cell(r, 8).value = ma['iphone_units']
-            ws.cell(r, 9).value = mb['iphone_units']
-            ws.cell(r,10).value = pct(mb['iphone_units'], ma['iphone_units'])
-            ws.cell(r,11).value = ma['watch_units']
-            ws.cell(r,12).value = mb['watch_units']
-            ws.cell(r,13).value = pct(mb['watch_units'], ma['watch_units'])
-            ws.cell(r,14).value = ma['airpods_units']
-            ws.cell(r,15).value = mb['airpods_units']
-            ws.cell(r,16).value = pct(mb['airpods_units'], ma['airpods_units'])
-            ws.cell(r,18).value = ma['txn_count']
-            ws.cell(r,21).value = mb['txn_count']
+            _set(ws, r,  2, ma['cpu_units'])
+            _set(ws, r,  3, mb['cpu_units'])
+            _fml_pct(ws, r, 4, 3, 2)
+            _set(ws, r,  5, ma['ipad_units'])
+            _set(ws, r,  6, mb['ipad_units'])
+            _fml_pct(ws, r, 7, 6, 5)
+            _set(ws, r,  8, ma['iphone_units'])
+            _set(ws, r,  9, mb['iphone_units'])
+            _fml_pct(ws, r, 10, 9, 8)
+            _set(ws, r, 11, ma['watch_units'])
+            _set(ws, r, 12, mb['watch_units'])
+            _fml_pct(ws, r, 13, 12, 11)
+            _set(ws, r, 14, ma['airpods_units'])
+            _set(ws, r, 15, mb['airpods_units'])
+            _fml_pct(ws, r, 16, 15, 14)
+            _set(ws, r, 18, ma['txn_count'])
+            _set(ws, r, 21, mb['txn_count'])
+            # 平均客單價 = 業績/筆數
+            ws.cell(r,26).value = f'=IF(R{r}=0,0,0)'  # 上期業績欄（手填或另查）
+            # 直接寫入計算值（txn 平均客單不在主表格欄位中）
             avg_a = rate(ma['total_excl_sa'], ma['txn_count'])
             avg_b = rate(mb['total_excl_sa'], mb['txn_count'])
-            ws.cell(r,26).value = avg_a
-            ws.cell(r,27).value = avg_b
-            ws.cell(r,28).value = avg_b - avg_a
-            ws.cell(r,29).value = pct(avg_b, avg_a)
+            _set(ws, r, 26, round(avg_a))
+            _set(ws, r, 27, round(avg_b))
+            ws.cell(r, 28).value = f'={_gcl(27)}{r}-{_gcl(26)}{r}'
+            ws.cell(r, 28).number_format = FMT_INT
+            _fml_pct(ws, r, 29, 27, 26)
 
     def fill_biz(ws, row_start, pa, pb):
         for ri, code in enumerate(rows_stores):
             r = row_start + ri
             a = M[pa][code]; b = M[pb][code]
             ws.cell(r, 1).value = eng.STORES.get(code, 'Total')
-            ws.cell(r, 2).value = a['total_excl_sa']
-            ws.cell(r, 3).value = b['total_excl_sa']
-            ws.cell(r, 4).value = pct(b['total_excl_sa'], a['total_excl_sa'])
-            ws.cell(r, 5).value = a['tpp_excl_sa']
-            ws.cell(r, 6).value = b['tpp_excl_sa']
-            ws.cell(r, 7).value = pct(b['tpp_excl_sa'], a['tpp_excl_sa'])
-            ws.cell(r, 8).value = a['sa_rev']
-            ws.cell(r, 9).value = b['sa_rev']
-            ws.cell(r,10).value = pct(b['sa_rev'], a['sa_rev'])
-            ws.cell(r,11).value = a['acpp_plus']
-            ws.cell(r,12).value = b['acpp_plus']
-            ws.cell(r,13).value = pct(b['acpp_plus'], a['acpp_plus'])
-            ws.cell(r,14).value = a['total_rev']
-            ws.cell(r,15).value = b['total_rev']
-            ws.cell(r,16).value = pct(b['total_rev'], a['total_rev'])
-            ws.cell(r,17).value = a['tpp_rev']
-            ws.cell(r,18).value = b['tpp_rev']
-            ws.cell(r,19).value = pct(b['tpp_rev'], a['tpp_rev'])
-            ws.cell(r,20).value = b['total_excl_sa'] - a['total_excl_sa']
-            ws.cell(r,21).value = b['tpp_excl_sa']   - a['tpp_excl_sa']
-            ws.cell(r,22).value = b['sa_rev']         - a['sa_rev']
-            ws.cell(r,23).value = b['acpp_plus']      - a['acpp_plus']
-            ws.cell(r,24).value = rate(a['tpp_excl_sa'], a['total_excl_sa'])
-            ws.cell(r,25).value = rate(b['tpp_excl_sa'], b['total_excl_sa'])
-            ws.cell(r,26).value = rate(a['sa_rev'],      a['total_excl_sa'])
-            ws.cell(r,27).value = rate(b['sa_rev'],      b['total_excl_sa'])
-            ws.cell(r,28).value = a['coupon_rev']
-            ws.cell(r,29).value = b['coupon_rev']
-            ws.cell(r,30).value = pct(b['coupon_rev'], a['coupon_rev'])
+            _set(ws, r,  2, a['total_excl_sa'])
+            _set(ws, r,  3, b['total_excl_sa'])
+            _fml_pct(ws, r,  4, 3, 2)
+            _set(ws, r,  5, a['tpp_excl_sa'])
+            _set(ws, r,  6, b['tpp_excl_sa'])
+            _fml_pct(ws, r,  7, 6, 5)
+            _set(ws, r,  8, a['sa_rev'])
+            _set(ws, r,  9, b['sa_rev'])
+            _fml_pct(ws, r, 10, 9, 8)
+            _set(ws, r, 11, a['acpp_plus'])
+            _set(ws, r, 12, b['acpp_plus'])
+            _fml_pct(ws, r, 13, 12, 11)
+            _set(ws, r, 14, a['total_rev'])
+            _set(ws, r, 15, b['total_rev'])
+            _fml_pct(ws, r, 16, 15, 14)
+            _set(ws, r, 17, a['tpp_rev'])
+            _set(ws, r, 18, b['tpp_rev'])
+            _fml_pct(ws, r, 19, 18, 17)
+            ws.cell(r, 20).value = f'={_gcl(3)}{r}-{_gcl(2)}{r}'
+            ws.cell(r, 20).number_format = FMT_INT
+            ws.cell(r, 21).value = f'={_gcl(6)}{r}-{_gcl(5)}{r}'
+            ws.cell(r, 21).number_format = FMT_INT
+            ws.cell(r, 22).value = f'={_gcl(9)}{r}-{_gcl(8)}{r}'
+            ws.cell(r, 22).number_format = FMT_INT
+            ws.cell(r, 23).value = f'={_gcl(12)}{r}-{_gcl(11)}{r}'
+            ws.cell(r, 23).number_format = FMT_INT
+            _fml_rate(ws, r, 24, 5, 2)
+            _fml_rate(ws, r, 25, 6, 3)
+            _fml_rate(ws, r, 26, 8, 2)
+            _fml_rate(ws, r, 27, 9, 3)
+            _set(ws, r, 28, a['coupon_rev'])
+            _set(ws, r, 29, b['coupon_rev'])
+            _fml_pct(ws, r, 30, 29, 28)
 
     def fill_biz_mo(ws, row_start, pa, pb):
         """月累積版（多兩個手動欄 col2-3）"""
@@ -268,33 +328,35 @@ def _fill_workbook(wk_end: date, log) -> bytes:
             r = row_start + ri
             a = M[pa][code]; b = M[pb][code]
             ws.cell(r, 1).value = eng.STORES.get(code, 'Total')
-            ws.cell(r, 4).value = a['total_excl_sa']
-            ws.cell(r, 5).value = b['total_excl_sa']
-            ws.cell(r, 6).value = pct(b['total_excl_sa'], a['total_excl_sa'])
-            ws.cell(r, 7).value = a['tpp_excl_sa']
-            ws.cell(r, 8).value = b['tpp_excl_sa']
-            ws.cell(r, 9).value = pct(b['tpp_excl_sa'], a['tpp_excl_sa'])
-            ws.cell(r,10).value = a['sa_rev']
-            ws.cell(r,11).value = b['sa_rev']
-            ws.cell(r,12).value = pct(b['sa_rev'], a['sa_rev'])
-            ws.cell(r,13).value = a['acpp_plus']
-            ws.cell(r,14).value = b['acpp_plus']
-            ws.cell(r,15).value = pct(b['acpp_plus'], a['acpp_plus'])
-            ws.cell(r,16).value = a['total_rev']
-            ws.cell(r,17).value = b['total_rev']
-            ws.cell(r,18).value = pct(b['total_rev'], a['total_rev'])
-            ws.cell(r,19).value = a['tpp_rev']
-            ws.cell(r,20).value = b['tpp_rev']
-            ws.cell(r,21).value = pct(b['tpp_rev'], a['tpp_rev'])
-            ws.cell(r,22).value = b['total_excl_sa'] - a['total_excl_sa']
-            ws.cell(r,23).value = b['tpp_excl_sa']   - a['tpp_excl_sa']
-            ws.cell(r,26).value = rate(a['tpp_excl_sa'], a['total_excl_sa'])
-            ws.cell(r,27).value = rate(b['tpp_excl_sa'], b['total_excl_sa'])
-            ws.cell(r,28).value = rate(a['sa_rev'],      a['total_excl_sa'])
-            ws.cell(r,29).value = rate(b['sa_rev'],      b['total_excl_sa'])
-            ws.cell(r,30).value = a['coupon_rev']
-            ws.cell(r,31).value = b['coupon_rev']
-            ws.cell(r,32).value = pct(b['coupon_rev'], a['coupon_rev'])
+            _set(ws, r,  4, a['total_excl_sa'])
+            _set(ws, r,  5, b['total_excl_sa'])
+            _fml_pct(ws, r,  6, 5, 4)
+            _set(ws, r,  7, a['tpp_excl_sa'])
+            _set(ws, r,  8, b['tpp_excl_sa'])
+            _fml_pct(ws, r,  9, 8, 7)
+            _set(ws, r, 10, a['sa_rev'])
+            _set(ws, r, 11, b['sa_rev'])
+            _fml_pct(ws, r, 12, 11, 10)
+            _set(ws, r, 13, a['acpp_plus'])
+            _set(ws, r, 14, b['acpp_plus'])
+            _fml_pct(ws, r, 15, 14, 13)
+            _set(ws, r, 16, a['total_rev'])
+            _set(ws, r, 17, b['total_rev'])
+            _fml_pct(ws, r, 18, 17, 16)
+            _set(ws, r, 19, a['tpp_rev'])
+            _set(ws, r, 20, b['tpp_rev'])
+            _fml_pct(ws, r, 21, 20, 19)
+            ws.cell(r, 22).value = f'={_gcl(5)}{r}-{_gcl(4)}{r}'
+            ws.cell(r, 22).number_format = FMT_INT
+            ws.cell(r, 23).value = f'={_gcl(8)}{r}-{_gcl(7)}{r}'
+            ws.cell(r, 23).number_format = FMT_INT
+            _fml_rate(ws, r, 26, 7, 4)
+            _fml_rate(ws, r, 27, 8, 5)
+            _fml_rate(ws, r, 28, 10, 4)
+            _fml_rate(ws, r, 29, 11, 5)
+            _set(ws, r, 30, a['coupon_rev'])
+            _set(ws, r, 31, b['coupon_rev'])
+            _fml_pct(ws, r, 32, 31, 30)
 
     # ── 配件 sheets ──────────────────────────────────────────────
     log('填入配件 sheets…')
@@ -710,7 +772,7 @@ def _fill_workbook(wk_end: date, log) -> bytes:
 
 
 # ─── Job 管理 ─────────────────────────────────────────────────
-def _run_job(job_id: str, wk_end_str: str):
+def _run_job(job_id: str, wk_end_str: str, use_full_month: bool = False):
     def log(msg):
         ts = time.strftime('%H:%M:%S')
         with _LOCK:
@@ -721,8 +783,9 @@ def _run_job(job_id: str, wk_end_str: str):
 
     try:
         wk_end = date.fromisoformat(wk_end_str)
-        result = _fill_workbook(wk_end, log)
-        filename = f'北一區週報_{wk_end}.xlsx'
+        result = _fill_workbook(wk_end, log, use_full_month=use_full_month)
+        suffix = '_完整月' if use_full_month else ''
+        filename = f'北一區週報_{wk_end}{suffix}.xlsx'
         with _LOCK:
             JOBS[job_id]['status']   = 'done'
             JOBS[job_id]['result']   = result
@@ -812,8 +875,9 @@ class Handler(SimpleHTTPRequestHandler):
         p = urllib.parse.urlparse(self.path)
         if p.path == '/api/generate':
             try:
-                payload  = self.read_body()
-                wk_end_s = str(payload.get('week_end', payload.get('wkEnd', ''))).strip()
+                payload       = self.read_body()
+                wk_end_s      = str(payload.get('week_end', payload.get('wkEnd', ''))).strip()
+                use_full_month = bool(payload.get('useFullMonth', False))
                 date.fromisoformat(wk_end_s)  # validate
             except Exception as e:
                 self.send_json(400, {'error': f'日期格式錯誤: {e}'})
@@ -821,7 +885,8 @@ class Handler(SimpleHTTPRequestHandler):
             job_id = str(uuid.uuid4())
             with _LOCK:
                 JOBS[job_id] = {'status': 'pending', 'messages': [], 'result': None}
-            threading.Thread(target=_run_job, args=(job_id, wk_end_s), daemon=True).start()
+            threading.Thread(target=_run_job, args=(job_id, wk_end_s, use_full_month),
+                             daemon=True).start()
             self.send_json(200, {'jobId': job_id})
             return
         self.send_json(404, {'error': 'Not found'})
