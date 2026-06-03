@@ -211,7 +211,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
             _set(ws, r, o+4,  A['wk'][code].get(c4, 0))
             _set(ws, r, o+7,  A['mtd'][code].get(c4, 0))
             _set(ws, r, o+8,  A['pm'][code].get(c4, 0))
-            _set(ws, r, o+11, A['lyw'][code].get(c4, 0))
+            _set(ws, r, o+11, A['lymo'][code].get(c4, 0))   # 去年同期=去年同月累積
             _set(ws, r, o+14, A['ytd_ly'][code].get(c4, 0))
             _set(ws, r, o+15, A['ytd_cy'][code].get(c4, 0))
             # 差值與百分比→公式
@@ -221,9 +221,9 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
             ws.cell(r, o+9).value = f'={_gcl(o+7)}{r}-{_gcl(o+8)}{r}'
             ws.cell(r, o+9).number_format = FMT_INT
             _fml_pct(ws, r, o+10, o+7, o+8)
-            ws.cell(r, o+12).value = f'={_gcl(o+4)}{r}-{_gcl(o+11)}{r}'
+            ws.cell(r, o+12).value = f'={_gcl(o+7)}{r}-{_gcl(o+11)}{r}'   # 本月MTD - 去年同月
             ws.cell(r, o+12).number_format = FMT_INT
-            _fml_pct(ws, r, o+13, o+4, o+11)
+            _fml_pct(ws, r, o+13, o+7, o+11)
             ws.cell(r, o+16).value = f'={_gcl(o+15)}{r}-{_gcl(o+14)}{r}'
             ws.cell(r, o+16).number_format = FMT_INT
             _fml_pct(ws, r, o+17, o+15, o+14)
@@ -239,9 +239,9 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
         ws.cell(total_r, o+9).value = f'={_gcl(o+7)}{total_r}-{_gcl(o+8)}{total_r}'
         ws.cell(total_r, o+9).number_format = FMT_INT
         _fml_pct(ws, total_r, o+10, o+7, o+8)
-        ws.cell(total_r, o+12).value = f'={_gcl(o+4)}{total_r}-{_gcl(o+11)}{total_r}'
+        ws.cell(total_r, o+12).value = f'={_gcl(o+7)}{total_r}-{_gcl(o+11)}{total_r}'
         ws.cell(total_r, o+12).number_format = FMT_INT
-        _fml_pct(ws, total_r, o+13, o+4, o+11)
+        _fml_pct(ws, total_r, o+13, o+7, o+11)
         ws.cell(total_r, o+16).value = f'={_gcl(o+15)}{total_r}-{_gcl(o+14)}{total_r}'
         ws.cell(total_r, o+16).number_format = FMT_INT
         _fml_pct(ws, total_r, o+17, o+15, o+14)
@@ -766,7 +766,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
         ws.cell(3, off+4).value  = f'{_d(WK_START)}~{_d(wk_end)}'
         ws.cell(3, off+7).value  = f'{_d(MTD_START)}~{_d(MTD_END)}'
         ws.cell(3, off+8).value  = f'{_d(PM_START)}~{_d(PM_END)}'
-        ws.cell(3, off+11).value = f'{LYW_END.year}/{_d(LYW_START)}~{_d(LYW_END)}'
+        ws.cell(3, off+11).value = f'{LYMO_START.year}/{_d(LYMO_START)}~{_d(LYMO_END)}'
         ws.cell(3, off+14).value = f'{YTD_S_LY.year}/{_d(YTD_S_LY)}~{_d(YTD_E_LY)}'
         ws.cell(3, off+15).value = f'{YTD_S_CY.year}/{_d(YTD_S_CY)}~{_d(YTD_E_CY)}'
 
