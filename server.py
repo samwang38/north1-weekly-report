@@ -52,8 +52,41 @@ def _last_saturday() -> date:
     return today - timedelta(days=days if days else 7)
 
 
+# ─── 由本週結束日推算各區間（供自訂模式預先帶入）───────────────
+def _compute_periods(wk_end: date, use_full_month: bool = False) -> dict:
+    WK_START = wk_end - timedelta(days=6)
+    PW_END   = WK_START - timedelta(days=1)
+    PW_START = PW_END - timedelta(days=6)
+    if WK_START.month != wk_end.month:
+        MTD_START = date(WK_START.year, WK_START.month, 1)
+        MTD_END   = date(WK_START.year, WK_START.month,
+                         monthrange(WK_START.year, WK_START.month)[1])
+    else:
+        MTD_START = date(wk_end.year, wk_end.month, 1)
+        MTD_END   = (date(wk_end.year, wk_end.month,
+                          monthrange(wk_end.year, wk_end.month)[1])
+                     if use_full_month else wk_end)
+    _pm_y = MTD_START.year if MTD_START.month > 1 else MTD_START.year - 1
+    _pm_m = MTD_START.month - 1 if MTD_START.month > 1 else 12
+    PM_START = date(_pm_y, _pm_m, 1)
+    PM_END   = date(_pm_y, _pm_m, monthrange(_pm_y, _pm_m)[1])
+    LYMO_START = date(MTD_START.year - 1, MTD_START.month, 1)
+    LYMO_END   = date(LYMO_START.year, LYMO_START.month,
+                      min(MTD_END.day, monthrange(LYMO_START.year, LYMO_START.month)[1]))
+    return {
+        'wk':     (WK_START.isoformat(),   wk_end.isoformat()),
+        'pw':     (PW_START.isoformat(),   PW_END.isoformat()),
+        'mtd':    (MTD_START.isoformat(),  MTD_END.isoformat()),
+        'pm':     (PM_START.isoformat(),   PM_END.isoformat()),
+        'lymo':   (LYMO_START.isoformat(), LYMO_END.isoformat()),
+        'ytd_cy': (date(MTD_END.year, 1, 1).isoformat(),  MTD_END.isoformat()),
+        'ytd_ly': (date(LYMO_END.year, 1, 1).isoformat(), LYMO_END.isoformat()),
+    }
+
+
 # ─── 核心填充邏輯 ─────────────────────────────────────────────
-def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
+def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
+                   custom_periods: dict = None) -> bytes:
     from openpyxl import load_workbook as _lw
     from openpyxl.utils import get_column_letter as _gcl
     from openpyxl.formatting.rule import CellIsRule
@@ -95,6 +128,20 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
     LYW_END   = wk_end   - timedelta(weeks=52)
     YTD_S_CY  = date(MTD_END.year, 1, 1);  YTD_E_CY = MTD_END
     YTD_S_LY  = date(LYMO_END.year, 1, 1); YTD_E_LY = LYMO_END
+
+    # 自訂模式：每組區間直接採用使用者輸入（上月同期=上月整月=使用者填的上月）
+    if custom_periods:
+        cp = custom_periods
+        WK_START, wk_end          = cp['wk']
+        PW_START, PW_END          = cp['pw']
+        MTD_START, MTD_END        = cp['mtd']
+        PM_START, PM_END          = cp['pm']
+        PM_SAME_START, PM_SAME_END = cp['pm']
+        LYMO_START, LYMO_END      = cp['lymo']
+        YTD_S_CY, YTD_E_CY        = cp['ytd_cy']
+        YTD_S_LY, YTD_E_LY        = cp['ytd_ly']
+        LYW_START = WK_START - timedelta(weeks=52)
+        LYW_END   = wk_end   - timedelta(weeks=52)
 
     STORE_CODES = list(eng.STORES.keys())
 
@@ -865,7 +912,8 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False) -> bytes:
 
 
 # ─── Job 管理 ─────────────────────────────────────────────────
-def _run_job(job_id: str, wk_end_str: str, use_full_month: bool = False):
+def _run_job(job_id: str, wk_end_str: str, use_full_month: bool = False,
+             custom_periods: dict = None):
     def log(msg):
         ts = time.strftime('%H:%M:%S')
         with _LOCK:
@@ -875,9 +923,11 @@ def _run_job(job_id: str, wk_end_str: str, use_full_month: bool = False):
         JOBS[job_id]['status'] = 'running'
 
     try:
-        wk_end = date.fromisoformat(wk_end_str)
-        result = _fill_workbook(wk_end, log, use_full_month=use_full_month)
-        suffix = '_完整月' if use_full_month else ''
+        wk_end = (custom_periods['wk'][1] if custom_periods
+                  else date.fromisoformat(wk_end_str))
+        result = _fill_workbook(wk_end, log, use_full_month=use_full_month,
+                                custom_periods=custom_periods)
+        suffix = '_自訂' if custom_periods else ('_完整月' if use_full_month else '')
         filename = f'北一區週報_{wk_end}{suffix}.xlsx'
         with _LOCK:
             JOBS[job_id]['status']   = 'done'
@@ -944,6 +994,15 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(200, {'date': _last_saturday().isoformat()})
             return
 
+        if p.path == '/api/periods':
+            try:
+                we = date.fromisoformat(qs.get('week_end', [''])[0])
+                fm = qs.get('full_month', ['0'])[0] in ('1', 'true', 'True')
+                self.send_json(200, _compute_periods(we, fm))
+            except Exception as e:
+                self.send_json(400, {'error': f'日期錯誤: {e}'})
+            return
+
         if p.path == '/api/traffic-status':
             stores = _load_traffic()
             all_dates = sorted(d for days in stores.values() for d in days)
@@ -993,18 +1052,30 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         p = urllib.parse.urlparse(self.path)
         if p.path == '/api/generate':
+            custom_periods = None
             try:
                 payload       = self.read_body()
-                wk_end_s      = str(payload.get('week_end', payload.get('wkEnd', ''))).strip()
                 use_full_month = bool(payload.get('useFullMonth', False))
-                date.fromisoformat(wk_end_s)  # validate
+                cp_raw = payload.get('customPeriods')
+                if cp_raw:
+                    # 自訂模式：每組區間 [起, 迄] ISO 字串 → date tuple
+                    keys = ['wk', 'pw', 'mtd', 'pm', 'lymo', 'ytd_cy', 'ytd_ly']
+                    custom_periods = {}
+                    for k in keys:
+                        s, e = cp_raw[k]
+                        custom_periods[k] = (date.fromisoformat(s), date.fromisoformat(e))
+                    wk_end_s = cp_raw['wk'][1]
+                else:
+                    wk_end_s = str(payload.get('week_end', payload.get('wkEnd', ''))).strip()
+                    date.fromisoformat(wk_end_s)  # validate
             except Exception as e:
                 self.send_json(400, {'error': f'日期格式錯誤: {e}'})
                 return
             job_id = str(uuid.uuid4())
             with _LOCK:
                 JOBS[job_id] = {'status': 'pending', 'messages': [], 'result': None}
-            threading.Thread(target=_run_job, args=(job_id, wk_end_s, use_full_month),
+            threading.Thread(target=_run_job,
+                             args=(job_id, wk_end_s, use_full_month, custom_periods),
                              daemon=True).start()
             self.send_json(200, {'jobId': job_id})
             return

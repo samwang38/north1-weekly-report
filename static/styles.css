@@ -143,3 +143,10 @@ h1 { font-size: 24px; font-weight: 700; }
   margin-bottom: 16px;
   white-space: pre-wrap;
 }
+
+/* 自訂日期區間 */
+.custom-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.custom-grid .cp-row { display: grid; grid-template-columns: 110px 1fr auto 1fr; align-items: center; gap: 8px; }
+.custom-grid .cp-row label { margin: 0; font-weight: normal; }
+.custom-grid .cp-row input[type="date"] { margin: 0; }
+.custom-grid .cp-sep { text-align: center; color: #888; }

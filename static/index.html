@@ -15,15 +15,35 @@
 
     <section class="card" id="configCard">
       <h2>設定</h2>
-      <div class="form-row">
-        <label for="weekEnd">週結束日期（週六）</label>
-        <input type="date" id="weekEnd">
+
+      <div class="form-row" style="align-items:center;gap:16px;">
+        <label style="margin:0;font-weight:normal;">
+          <input type="radio" name="dateMode" value="auto" checked style="width:auto;margin:0 4px 0 0;">自動（最近完整週）
+        </label>
+        <label style="margin:0;font-weight:normal;">
+          <input type="radio" name="dateMode" value="custom" style="width:auto;margin:0 4px 0 0;">自訂日期
+        </label>
       </div>
-      <p class="hint" id="weekRangeHint"></p>
-      <div class="form-row" style="align-items:center;gap:8px;">
-        <input type="checkbox" id="useFullMonth" style="width:auto;margin:0;">
-        <label for="useFullMonth" style="margin:0;font-weight:normal;">月累積延伸到月底（本月/去年同期/年累積 用完整月）</label>
+
+      <!-- 自動模式 -->
+      <div id="autoPane">
+        <div class="form-row">
+          <label for="weekEnd">週結束日期（週六）</label>
+          <input type="date" id="weekEnd">
+        </div>
+        <p class="hint" id="weekRangeHint"></p>
+        <div class="form-row" style="align-items:center;gap:8px;">
+          <input type="checkbox" id="useFullMonth" style="width:auto;margin:0;">
+          <label for="useFullMonth" style="margin:0;font-weight:normal;">月累積延伸到月底（本月/去年同期/年累積 用完整月）</label>
+        </div>
       </div>
+
+      <!-- 自訂模式 -->
+      <div id="customPane" hidden>
+        <p class="hint">每組區間都可自由調整（已帶入預設值，可直接修改）</p>
+        <div id="customGrid" class="custom-grid"></div>
+      </div>
+
       <div class="actions">
         <button class="primary-btn" id="generateBtn" type="button">產生週報</button>
       </div>

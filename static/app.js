@@ -114,10 +114,77 @@
     }
   }
 
+  // ── 自訂日期：區間定義 + 表單 ──
+  const CP_FIELDS = [
+    ['wk',     '本週'],
+    ['pw',     '上週'],
+    ['mtd',    '本月'],
+    ['pm',     '上月'],
+    ['lymo',   '去年同月'],
+    ['ytd_ly', '去年年累積'],
+    ['ytd_cy', '今年年累積'],
+  ];
+
+  function buildCustomGrid() {
+    const grid = $('customGrid');
+    if (grid.dataset.built) return;
+    grid.innerHTML = CP_FIELDS.map(([k, label]) => `
+      <div class="cp-row">
+        <label>${label}</label>
+        <input type="date" id="cp_${k}_s">
+        <span class="cp-sep">～</span>
+        <input type="date" id="cp_${k}_e">
+      </div>`).join('');
+    grid.dataset.built = '1';
+  }
+
+  async function prefillCustom() {
+    // 用目前自動模式的週結束日 + 延伸月底，向後端取得預設區間帶入
+    const wkEnd = weekEndInput.value || '';
+    const fm = document.getElementById('useFullMonth')?.checked ? '1' : '0';
+    try {
+      const res = await fetch(`/api/periods?week_end=${wkEnd}&full_month=${fm}`);
+      const p = await res.json();
+      if (p.error) return;
+      CP_FIELDS.forEach(([k]) => {
+        if (p[k]) { $(`cp_${k}_s`).value = p[k][0]; $(`cp_${k}_e`).value = p[k][1]; }
+      });
+    } catch (e) { /* 預設帶入失敗不影響手動輸入 */ }
+  }
+
+  function collectCustomPeriods() {
+    const cp = {};
+    for (const [k, label] of CP_FIELDS) {
+      const s = $(`cp_${k}_s`).value, e = $(`cp_${k}_e`).value;
+      if (!s || !e) { alert(`請完整填寫「${label}」的起迄日期`); return null; }
+      if (s > e)    { alert(`「${label}」的起日不能晚於迄日`); return null; }
+      cp[k] = [s, e];
+    }
+    return cp;
+  }
+
+  function applyMode() {
+    const isCustom = document.querySelector('input[name="dateMode"]:checked')?.value === 'custom';
+    $('autoPane').hidden = isCustom;
+    $('customPane').hidden = !isCustom;
+    if (isCustom) { buildCustomGrid(); prefillCustom(); }
+  }
+  document.querySelectorAll('input[name="dateMode"]').forEach(r =>
+    r.addEventListener('change', applyMode));
+
   generateBtn.addEventListener('click', async () => {
-    const wkEnd = weekEndInput.value;
-    if (!wkEnd) { alert('請選擇週結束日期'); return; }
-    const useFullMonth = !!document.getElementById('useFullMonth')?.checked;
+    const isCustom = document.querySelector('input[name="dateMode"]:checked')?.value === 'custom';
+    let body;
+    if (isCustom) {
+      const cp = collectCustomPeriods();
+      if (!cp) return;   // 驗證失敗（collectCustomPeriods 內已提示）
+      body = { customPeriods: cp };
+    } else {
+      const wkEnd = weekEndInput.value;
+      if (!wkEnd) { alert('請選擇週結束日期'); return; }
+      const useFullMonth = !!document.getElementById('useFullMonth')?.checked;
+      body = { week_end: wkEnd, useFullMonth };
+    }
 
     logBox.innerHTML = '';
     seenCount = 0;
@@ -129,7 +196,7 @@
       const res  = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ week_end: wkEnd, useFullMonth }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
