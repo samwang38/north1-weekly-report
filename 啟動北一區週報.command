@@ -36,8 +36,13 @@ if [ -n "$OLD" ]; then
   sleep 1
 fi
 
+# ── 順便打開 ShopperTrak（讓插件自動推人流）+ 週報網頁 ──────────
+echo "開啟 ShopperTrak 與週報網頁…"
+open "https://analytics.shoppertrak.com/" 2>/dev/null
+( sleep 2 && open "http://127.0.0.1:8782/" ) &
+
 echo "啟動伺服器（port 8782）…"
-echo "請在瀏覽器開啟：http://127.0.0.1:8782/"
+echo "（瀏覽器會自動開啟，若沒開請手動前往 http://127.0.0.1:8782/ ）"
 echo ""
 echo "關閉此視窗即可停止伺服器。"
 echo "-------------------------------------------"
