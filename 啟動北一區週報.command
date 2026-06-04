@@ -28,6 +28,14 @@ if [ $? -ne 0 ]; then
   pip3 install openpyxl pandas --quiet
 fi
 
+# ── 清掉佔用 8782 的舊伺服器（避免「跑到舊版」）──────────────
+OLD=$(lsof -ti :8782 2>/dev/null)
+if [ -n "$OLD" ]; then
+  echo "發現舊伺服器仍在執行，先關閉…"
+  echo "$OLD" | xargs kill -9 2>/dev/null
+  sleep 1
+fi
+
 echo "啟動伺服器（port 8782）…"
 echo "請在瀏覽器開啟：http://127.0.0.1:8782/"
 echo ""

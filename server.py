@@ -905,10 +905,49 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     for c in (24, 26, 28): ws_yoy.cell(3, c).value = ytd_ly_ymd
     for c in (25, 27, 29): ws_yoy.cell(3, c).value = ytd_cy_ymd
 
+    # ── 結構自我檢查（抓「填錯格子 / 範本跑版」這類默默出錯）──
+    _verify_structure(wb, rows_stores, log)
+
     log('儲存 Excel…')
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _verify_structure(wb, rows_stores, log):
+    """產報前驗證版面：店名是否落在正確列、分頁是否齊全、日期是否有填。
+    發現問題就丟例外中止，避免默默產出對不上的報表。
+    """
+    issues = []
+    expect_names = [eng.STORES[c] for c in rows_stores if c != 'ALL'] + ['Total']
+
+    # 1. BY 四表業績區（第 4 列起）店名順序正確
+    for sh in ['BY店 本週比較', 'BY店 月累積', 'BY店 去年同期', 'BY店 整年同期']:
+        if sh not in wb.sheetnames:
+            issues.append(f'缺少分頁「{sh}」'); continue
+        ws = wb[sh]
+        got = [str(ws.cell(4 + i, 1).value or '').strip() for i in range(len(expect_names))]
+        if got != expect_names:
+            issues.append(f'「{sh}」業績區店名對不上：預期{expect_names}，實得{got}')
+
+    # 2. 每間門市的配件分頁都存在
+    for c in rows_stores:
+        if c == 'ALL':
+            continue
+        sname = f'配件 - {eng.STORES[c]}'
+        if sname not in wb.sheetnames:
+            issues.append(f'缺少配件分頁「{sname}」')
+
+    # 3. 本週比較第 3 列要有日期字樣（確認日期標題有更新）
+    ws_wk = wb['BY店 本週比較']
+    if not any('~' in str(ws_wk.cell(3, c).value or '') for c in range(1, 33)):
+        issues.append('「BY店 本週比較」第 3 列找不到日期區間，標題可能沒更新')
+
+    if issues:
+        msg = '結構檢查未通過：\n  - ' + '\n  - '.join(issues)
+        log('✗ ' + msg)
+        raise RuntimeError(msg)
+    log('結構檢查通過 ✓')
 
 
 # ─── Job 管理 ─────────────────────────────────────────────────
