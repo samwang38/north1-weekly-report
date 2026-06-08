@@ -248,6 +248,12 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         ws.cell(r_total, c).value = f'=SUM({col_l}{r_start}:{col_l}{r_end})'
         ws.cell(r_total, c).number_format = FMT_INT
 
+    def _total_sums(ws, row_start, cols):
+        """Total 列（rows_stores 最後一筆 ALL）的加總欄改用 SUM 公式。"""
+        tot = row_start + len(rows_stores) - 1   # Total 列
+        for c in cols:
+            _fml_sum(ws, tot, c, row_start, tot - 1)
+
     # ── helpers ──────────────────────────────────────────────────
     def fill_acc_section(ws, row_start, col_offset, code):
         n = len(eng.C4_ACCESSORY)
@@ -337,6 +343,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             _fml_rate(ws, r, 31, 30, 27)
             ws.cell(r,32).value = f'=IF(AA{r}=0,0,(AB{r}+AD{r})/AA{r})'
             ws.cell(r,32).number_format = FMT_PCT
+        _total_sums(ws, row_start, [2,3,5,8,9,11,14,15,17,20,21,23,27,28,30])
         # 合計搭售率未達目標 → 紅字（條件式格式，依儲存格值動態套用）
         r_end = row_start + len(rows_stores) - 1
         for col, tgt in WARRANTY_TARGETS.items():
@@ -401,6 +408,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             ws.cell(r, 28).value = f'={_gcl(27)}{r}-{_gcl(26)}{r}'
             ws.cell(r, 28).number_format = FMT_INT
             _fml_pct(ws, r, 29, 27, 26)
+        _total_sums(ws, row_start, [2,3,5,6,8,9,11,12,14,15,18,21])
 
     def fill_biz(ws, row_start, pa, pb):
         for ri, code in enumerate(rows_stores):
@@ -440,6 +448,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             _set(ws, r, 28, a['coupon_rev'])
             _set(ws, r, 29, b['coupon_rev'])
             _fml_pct(ws, r, 30, 29, 28)
+        _total_sums(ws, row_start, [2,3,5,6,8,9,11,12,14,15,17,18,28,29])
 
     def fill_biz_mo(ws, row_start, pa, pb):
         """月累積版（多兩個手動欄 col2-3）"""
@@ -484,6 +493,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             _set(ws, r, 30, a['coupon_rev'])
             _set(ws, r, 31, b['coupon_rev'])
             _fml_pct(ws, r, 32, 31, 30)
+        _total_sums(ws, row_start, [4,5,7,8,10,11,13,14,16,17,19,20,30,31])
 
     # ── 配件 sheets ──────────────────────────────────────────────
     log('填入配件 sheets…')
