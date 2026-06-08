@@ -45,6 +45,24 @@
       <p class="hint" id="trafficStatus">人流狀態：查詢中…</p>
     </section>
 
+    <section class="card" id="shopperTrakCard">
+      <h2>ShopperTrak 來客數（自動帶入）</h2>
+      <p class="hint" id="stStatus">　</p>
+      <div class="form-row">
+        <label for="stUser">帳號</label>
+        <input type="text" id="stUser" autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label for="stPass">密碼</label>
+        <input type="password" id="stPass" autocomplete="off">
+      </div>
+      <div class="actions">
+        <button class="primary-btn" id="stSaveBtn" type="button">儲存帳密</button>
+        <button class="ghost-btn" id="stClearBtn" type="button">清除</button>
+      </div>
+      <p class="hint">帳密只存在本機（local_config.json，不上傳）。產週報時自動登入抓來客數；失敗則略過、其餘照常產生。需先安裝 Playwright。</p>
+    </section>
+
     <section class="card" id="progressCard" hidden>
       <h2>產生進度</h2>
       <div class="progress-bar-wrap">

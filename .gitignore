@@ -5,3 +5,4 @@ __pycache__/
 downloads/
 *.xlsx.tmp
 data/traffic_cache.json
+local_config.json

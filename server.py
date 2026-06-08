@@ -12,6 +12,20 @@ STATIC_ROOT  = ROOT / 'static'
 TEMPLATE     = ROOT / 'template' / '北一區週報_優化.xlsx'
 SA_FILE      = ROOT / 'data' / 'SAcare對應價目表.xlsx'
 TRAFFIC_FILE = ROOT / 'data' / 'traffic_cache.json'
+LOCAL_CONFIG = ROOT / 'local_config.json'   # 帳密/編制人數，不上 git
+
+
+def _load_local_config() -> dict:
+    try:
+        return json.loads(LOCAL_CONFIG.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+def _save_local_config(cfg: dict):
+    LOCAL_CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                            encoding='utf-8')
+
 
 sys.path.insert(0, str(ROOT))
 import multistore_engine as eng
@@ -195,6 +209,27 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         MISC_WK[code]  = eng.calc_misc_metrics(df_cy, WK_START, wk_end,    sc, sa_prices)
         MISC_PW[code]  = eng.calc_misc_metrics(df_cy, PW_START, PW_END,    sc, sa_prices)
         MISC_MTD[code] = eng.calc_misc_metrics(df_cy, MTD_START, MTD_END,  sc, sa_prices)
+
+    # 來客數：嘗試用 Playwright 自動登入 ShopperTrak 抓最新每日來客數，灌進快取
+    # （任何一步失敗都只記 log 略過，改用既有快取/留白，週報其餘照常產生）
+    _st_cfg = _load_local_config().get('shoppertrak', {})
+    if _st_cfg.get('username') and _st_cfg.get('password'):
+        try:
+            import shoppertrak
+            codes = [c for c in STORE_CODES if c in shoppertrak.SITE_IDS]
+            log('登入 ShopperTrak 抓取來客數…')
+            fetched = shoppertrak.fetch_all(codes, YTD_S_LY, YTD_E_CY,
+                                            _st_cfg['username'], _st_cfg['password'], log)
+            if fetched:
+                cur = _load_traffic()
+                for code, days in fetched.items():
+                    cur.setdefault(code, {}).update({str(d): int(v) for d, v in days.items()})
+                _save_traffic(cur)
+                log(f'來客數已更新：{len(fetched)} 店')
+        except Exception as e:
+            log(f'（來客數自動抓取略過：{e}）')
+    else:
+        log('（未設定 ShopperTrak 帳密，略過自動抓來客數）')
 
     # 人流：依期間加總每店每日人流（羅東無計數器，維持公式不填）
     _traffic = _load_traffic()
@@ -1043,6 +1078,12 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(200, {'date': _last_saturday().isoformat()})
             return
 
+        if p.path == '/api/shoppertrak-config':
+            st = _load_local_config().get('shoppertrak', {})
+            self.send_json(200, {'hasCreds': bool(st.get('username') and st.get('password')),
+                                 'username': st.get('username', '')})
+            return
+
         if p.path == '/api/periods':
             try:
                 we = date.fromisoformat(qs.get('week_end', [''])[0])
@@ -1147,6 +1188,26 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(400, {'error': f'人流資料錯誤: {e}'})
                 return
             self.send_json(200, {'ok': True, 'stores': len(stores), 'days': n_days})
+            return
+
+        if p.path == '/api/shoppertrak-config':
+            try:
+                payload = self.read_body()
+                cfg = _load_local_config()
+                if payload.get('clear'):
+                    cfg.pop('shoppertrak', None)
+                else:
+                    u = str(payload.get('username', '')).strip()
+                    pw = str(payload.get('password', '')).strip()
+                    if not u or not pw:
+                        self.send_json(400, {'error': '帳號與密碼都要填'})
+                        return
+                    cfg['shoppertrak'] = {'username': u, 'password': pw}
+                _save_local_config(cfg)
+            except Exception as e:
+                self.send_json(400, {'error': f'儲存失敗: {e}'})
+                return
+            self.send_json(200, {'ok': True})
             return
 
         self.send_json(404, {'error': 'Not found'})

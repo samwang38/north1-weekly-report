@@ -250,7 +250,39 @@
     }
   }
 
+  // ── ShopperTrak 帳密設定 ──
+  const stUser = $('stUser'), stPass = $('stPass'), stStatus = $('stStatus');
+  async function refreshStConfig() {
+    if (!stStatus) return;
+    try {
+      const d = await (await fetch('/api/shoppertrak-config')).json();
+      if (d.hasCreds) {
+        stStatus.textContent = `🟢 已設定帳號：${d.username}（產週報時自動抓來客數）`;
+        if (stUser && !stUser.value) stUser.value = d.username;
+      } else {
+        stStatus.textContent = '⚪ 尚未設定帳密 — 填入後按「儲存帳密」';
+      }
+    } catch (e) { stStatus.textContent = ''; }
+  }
+  $('stSaveBtn')?.addEventListener('click', async () => {
+    const username = stUser.value.trim(), password = stPass.value.trim();
+    if (!username || !password) { alert('帳號與密碼都要填'); return; }
+    const r = await fetch('/api/shoppertrak-config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }) });
+    const d = await r.json();
+    if (d.ok) { stPass.value = ''; alert('已儲存（只存在本機）'); refreshStConfig(); }
+    else alert('儲存失敗：' + (d.error || ''));
+  });
+  $('stClearBtn')?.addEventListener('click', async () => {
+    await fetch('/api/shoppertrak-config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear: true }) });
+    stUser.value = ''; stPass.value = ''; refreshStConfig();
+  });
+
   loadDefaultDate();
   refreshTrafficStatus();
+  refreshStConfig();
   setInterval(refreshTrafficStatus, 15000);
 })();
