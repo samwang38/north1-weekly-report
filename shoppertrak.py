@@ -145,7 +145,11 @@ def _ensure_token(username, password, log, force=False):
 
 def _query_daily(site_id, start: date, end: date, auth, tenant):
     """打 REST API 取每日 traffic，回傳 {date: traffic}。"""
-    import urllib.request, json as _json
+    import urllib.request, json as _json, ssl
+    # 公司 VPN(Fortinet) 會做 SSL 檢查插入自簽憑證 → 關閉憑證驗證才連得到
+    _ctx = ssl.create_default_context()
+    _ctx.check_hostname = False
+    _ctx.verify_mode = ssl.CERT_NONE
     url = f"{API_BASE}/api/v1/kpis/organizations/{ORG_ID}/sites/{site_id}"
     body = _json.dumps({
         "groupBy": "day",
@@ -158,7 +162,7 @@ def _query_daily(site_id, start: date, end: date, auth, tenant):
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {auth}", "tenant": tenant,
         "Content-Type": "application/json", "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(req, timeout=120, context=_ctx) as r:
         if r.status in (401, 419):
             raise PermissionError("token expired")
         data = _json.loads(r.read().decode("utf-8"))
