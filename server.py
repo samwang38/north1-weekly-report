@@ -83,7 +83,7 @@ def _compute_periods(wk_end: date, use_full_month: bool = False) -> dict:
     _pm_y = MTD_START.year if MTD_START.month > 1 else MTD_START.year - 1
     _pm_m = MTD_START.month - 1 if MTD_START.month > 1 else 12
     PM_START = date(_pm_y, _pm_m, 1)
-    PM_END   = date(_pm_y, _pm_m, monthrange(_pm_y, _pm_m)[1])
+    PM_END   = date(_pm_y, _pm_m, min(MTD_END.day, monthrange(_pm_y, _pm_m)[1]))  # 上月同期
     LYMO_START = date(MTD_START.year - 1, MTD_START.month, 1)
     LYMO_END   = date(LYMO_START.year, LYMO_START.month,
                       min(MTD_END.day, monthrange(LYMO_START.year, LYMO_START.month)[1]))
