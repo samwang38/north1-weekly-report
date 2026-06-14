@@ -468,7 +468,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             _set(ws, r, 17, a['tpp_rev'])
             _set(ws, r, 18, b['tpp_rev'])
             _fml_pct(ws, r, 19, 18, 17)
-            ws.cell(r, 20).value = f'={_gcl(3)}{r}-{_gcl(2)}{r}'
+            ws.cell(r, 20).value = f'={_gcl(15)}{r}-{_gcl(14)}{r}'   # 總業績差異=O-N(含SA)
             ws.cell(r, 20).number_format = FMT_INT
             ws.cell(r, 21).value = f'={_gcl(6)}{r}-{_gcl(5)}{r}'
             ws.cell(r, 21).number_format = FMT_INT
@@ -509,7 +509,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             _set(ws, r, 19, a['tpp_rev'])
             _set(ws, r, 20, b['tpp_rev'])
             _fml_pct(ws, r, 21, 20, 19)
-            ws.cell(r, 22).value = f'={_gcl(5)}{r}-{_gcl(4)}{r}'
+            ws.cell(r, 22).value = f'={_gcl(17)}{r}-{_gcl(16)}{r}'   # 總業績差異=Q-P(含SA)
             ws.cell(r, 22).number_format = FMT_INT
             ws.cell(r, 23).value = f'={_gcl(8)}{r}-{_gcl(7)}{r}'
             ws.cell(r, 23).number_format = FMT_INT
