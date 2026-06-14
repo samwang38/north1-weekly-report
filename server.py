@@ -298,7 +298,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             _set(ws, r, o+3,  A['pw'][code].get(c4, 0))
             _set(ws, r, o+4,  A['wk'][code].get(c4, 0))
             _set(ws, r, o+7,  A['mtd'][code].get(c4, 0))
-            _set(ws, r, o+8,  A['pm'][code].get(c4, 0))
+            _set(ws, r, o+8,  A['pm_same'][code].get(c4, 0))
             _set(ws, r, o+11, A['lymo'][code].get(c4, 0))   # 去年同期=去年同月累積
             _set(ws, r, o+14, A['ytd_ly'][code].get(c4, 0))
             _set(ws, r, o+15, A['ytd_cy'][code].get(c4, 0))
@@ -857,7 +857,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         ws.cell(3, off+3).value  = f'{_d(PW_START)}~{_d(PW_END)}'
         ws.cell(3, off+4).value  = f'{_d(WK_START)}~{_d(wk_end)}'
         ws.cell(3, off+7).value  = f'{_d(MTD_START)}~{_d(MTD_END)}'
-        ws.cell(3, off+8).value  = f'{_d(PM_START)}~{_d(PM_END)}'
+        ws.cell(3, off+8).value  = f'{_d(PM_START)}~{_d(PM_SAME_END)}'
         ws.cell(3, off+11).value = f'{LYMO_START.year}/{_d(LYMO_START)}~{_d(LYMO_END)}'
         ws.cell(3, off+14).value = f'{YTD_S_LY.year}/{_d(YTD_S_LY)}~{_d(YTD_E_LY)}'
         ws.cell(3, off+15).value = f'{YTD_S_CY.year}/{_d(YTD_S_CY)}~{_d(YTD_E_CY)}'
