@@ -476,10 +476,10 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             ws.cell(r, 22).number_format = FMT_INT
             ws.cell(r, 23).value = f'={_gcl(12)}{r}-{_gcl(11)}{r}'
             ws.cell(r, 23).number_format = FMT_INT
-            _fml_rate(ws, r, 24, 5, 2)
-            _fml_rate(ws, r, 25, 6, 3)
-            _fml_rate(ws, r, 26, 8, 2)
-            _fml_rate(ws, r, 27, 9, 3)
+            _fml_rate(ws, r, 24, 5, 14)
+            _fml_rate(ws, r, 25, 6, 15)
+            _fml_rate(ws, r, 26, 8, 14)
+            _fml_rate(ws, r, 27, 9, 15)
             _set(ws, r, 28, a['coupon_rev'])
             _set(ws, r, 29, b['coupon_rev'])
             _fml_pct(ws, r, 30, 29, 28)
@@ -521,10 +521,10 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             ws.cell(r, 25).number_format = FMT_INT
             # 達成率 = 本月總業績 / 本月目標 (Q/B)
             _fml_rate(ws, r, 3, 17, 2)
-            _fml_rate(ws, r, 26, 7, 4)
-            _fml_rate(ws, r, 27, 8, 5)
-            _fml_rate(ws, r, 28, 10, 4)
-            _fml_rate(ws, r, 29, 11, 5)
+            _fml_rate(ws, r, 26, 7, 16)
+            _fml_rate(ws, r, 27, 8, 17)
+            _fml_rate(ws, r, 28, 10, 16)
+            _fml_rate(ws, r, 29, 11, 17)
             _set(ws, r, 30, a['coupon_rev'])
             _set(ws, r, 31, b['coupon_rev'])
             _fml_pct(ws, r, 32, 31, 30)
