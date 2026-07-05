@@ -164,7 +164,9 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     log(f'LYMO: {LYMO_START}~{LYMO_END}')
 
     log('載入今年銷售資料（EPB）…')
-    df_cy = eng.load_from_epb(YTD_S_CY, YTD_E_CY, store_codes=STORE_CODES)
+    # 跨月週(如 6/28~7/4)時 YTD_E_CY=MTD_END=6/30，載入須延伸到 wk_end 才不會漏本週的 7 月資料
+    cy_end = max(wk_end, MTD_END, YTD_E_CY)
+    df_cy = eng.load_from_epb(YTD_S_CY, cy_end, store_codes=STORE_CODES)
     log(f'  今年資料：{len(df_cy):,} 筆')
 
     ly_end = max(LYW_END, LYMO_END, YTD_E_LY)
