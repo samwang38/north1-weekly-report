@@ -220,7 +220,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             import shoppertrak
             codes = [c for c in STORE_CODES if c in shoppertrak.SITE_IDS]
             log('登入 ShopperTrak 抓取來客數…')
-            fetched = shoppertrak.fetch_all(codes, YTD_S_LY, YTD_E_CY,
+            fetched = shoppertrak.fetch_all(codes, YTD_S_LY, cy_end,
                                             _st_cfg['username'], _st_cfg['password'], log)
             if fetched:
                 cur = _load_traffic()
