@@ -446,17 +446,20 @@ def txn_count(df: pd.DataFrame) -> int:
 
 
 def acpp_units_total(df: pd.DataFrame) -> int:
-    """ACPP+ 台數 = 類別3=3032 的 SALE_TYPES 數量總和"""
-    m = (df['類別3代碼'] == 3032.0) & df['交易類型'].isin(SALE_TYPES)
-    return int(df.loc[m, '數量'].sum())
+    """ACPP+ 台數 = 類別3=3032 的數量，扣除銷退"""
+    base = (df['類別3代碼'] == 3032.0)
+    sale = df.loc[base & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
+    ret  = df.loc[base & (df['交易類型'] == '銷退'), '數量'].abs().sum()
+    return int(sale - ret)
 
 
 def acpp_units_by_device(df: pd.DataFrame, keyword: str) -> int:
-    """ACPP+ 台數（分類別）：類別3=3032 + 名稱含 keyword（mac/ipad/iphone/watch/airpods）"""
-    m = (df['類別3代碼'] == 3032.0) & \
-        df['名稱'].astype(str).str.lower().str.contains(keyword.lower(), na=False) & \
-        df['交易類型'].isin(SALE_TYPES)
-    return int(df.loc[m, '數量'].sum())
+    """ACPP+ 台數（分類別）：類別3=3032 + 名稱含 keyword（mac/ipad/iphone/watch/airpods），扣除銷退"""
+    base = (df['類別3代碼'] == 3032.0) & \
+        df['名稱'].astype(str).str.lower().str.contains(keyword.lower(), na=False)
+    sale = df.loc[base & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
+    ret  = df.loc[base & (df['交易類型'] == '銷退'), '數量'].abs().sum()
+    return int(sale - ret)
 
 
 def sacare_units(df: pd.DataFrame, c6_set: set[float], sa_codes: set[str]) -> int:
