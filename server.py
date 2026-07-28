@@ -107,7 +107,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     from openpyxl.styles import Font as _Font
 
     # 保固合計搭售率目標（合計搭售率欄 → 目標%）：未達標轉紅字
-    WARRANTY_TARGETS = {7: 0.60, 13: 0.40, 19: 0.50, 25: 0.19, 32: 0.35}
+    WARRANTY_TARGETS = {7: 0.60, 13: 0.40, 19: 0.50, 25: 0.30, 32: 0.35}
     _RED_FONT = _Font(color='FFFF0000')
 
     WK_START = wk_end - timedelta(days=6)
