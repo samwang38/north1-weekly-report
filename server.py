@@ -166,12 +166,15 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     log('載入今年銷售資料（EPB）…')
     # 跨月週(如 6/28~7/4)時 YTD_E_CY=MTD_END=6/30，載入須延伸到 wk_end 才不會漏本週的 7 月資料
     cy_end = max(wk_end, MTD_END, YTD_E_CY)
-    df_cy = eng.load_from_epb(YTD_S_CY, cy_end, store_codes=STORE_CODES)
+    # 1 月的週報「上週/上月/上月同期」落在去年 12 月，起始日也要往前延伸才不會整欄變 0
+    cy_start = min(YTD_S_CY, WK_START, PW_START, MTD_START, PM_START, PM_SAME_START)
+    df_cy = eng.load_from_epb(cy_start, cy_end, store_codes=STORE_CODES)
     log(f'  今年資料：{len(df_cy):,} 筆')
 
     ly_end = max(LYW_END, LYMO_END, YTD_E_LY)
+    ly_start = min(YTD_S_LY, LYW_START, LYMO_START)
     log('載入去年銷售資料（EPB）…')
-    df_ly = eng.load_from_epb(YTD_S_LY, ly_end, store_codes=STORE_CODES)
+    df_ly = eng.load_from_epb(ly_start, ly_end, store_codes=STORE_CODES)
     log(f'  去年資料：{len(df_ly):,} 筆')
 
     sa_prices = eng.load_sacare_prices(str(SA_FILE))
