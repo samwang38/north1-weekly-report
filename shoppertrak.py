@@ -4,6 +4,8 @@ ShopperTrak 無公開 API key，登入為 SSO（帳密 → sessionStorage 取 to
 本模組用 Playwright 開無頭 Chromium 自動登入，取出 authToken/tenantId 後直接打 REST API。
 任何一步失敗都丟 ShopperTrakError，由主程式 try/except 略過來客數、其餘照常產生。
 """
+import subprocess
+import sys
 from datetime import date
 
 ORG_ID    = 5536
@@ -84,6 +86,24 @@ def _submit(page, field):
             continue
 
 
+def _launch_chromium(p, log):
+    """開 chromium；若瀏覽器執行檔不存在（Playwright 更新後常見），自動下載後重試一次。"""
+    try:
+        return p.chromium.launch(headless=True)
+    except Exception as e:
+        if "Executable doesn't exist" not in str(e):
+            raise
+        log("瀏覽器執行檔不存在，自動下載中（首次約需 1-2 分鐘）...")
+        r = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise ShopperTrakError(
+                "Playwright 瀏覽器自動下載失敗，請手動執行："
+                f"python3 -m playwright install chromium\n{r.stderr.strip()[-500:]}")
+        log("瀏覽器下載完成，繼續查詢")
+        return p.chromium.launch(headless=True)
+
+
 def _login(username, password, log):
     try:
         from playwright.sync_api import sync_playwright
@@ -93,7 +113,7 @@ def _login(username, password, log):
             "pip3 install playwright && python3 -m playwright install chromium")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = _launch_chromium(p, log)
         try:
             page = browser.new_page()
             page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
