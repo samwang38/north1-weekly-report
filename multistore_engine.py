@@ -472,9 +472,12 @@ def sacare_units(df: pd.DataFrame, c6_set: set[float], sa_codes: set[str]) -> in
 
 def coupon_stats(df: pd.DataFrame) -> tuple[int, int]:
     """抵用券：回傳 (贈出數量, 抵用數量)"""
-    give = df.loc[df['存貨代碼'] == COUPON_GIVE, '數量'].abs().sum()
-    redeem = df.loc[df['存貨代碼'] == COUPON_REDEEM, '數量'].abs().sum()
-    return int(give), int(redeem)
+    def _net(sku):
+        sub = df.loc[df['存貨代碼'] == sku]
+        sale = sub.loc[sub['交易類型'].isin(SALE_TYPES), '數量'].abs().sum()
+        ret  = sub.loc[sub['交易類型'] == '銷退', '數量'].abs().sum()
+        return int(sale - ret)
+    return _net(COUPON_GIVE), _net(COUPON_REDEEM)
 
 
 # 禮券（高島屋等百貨禮券折抵）
