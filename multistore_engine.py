@@ -726,16 +726,20 @@ def calc_misc_metrics(df: pd.DataFrame, start: date, end: date,
 
 
 # ─── 人員銷售：輔助函式 ────────────────────────────────────────────────
-# AirPods 主機類別6（與 fill_multistore_excel.py 各 BY店 sheet 保持一致）
-C6_AIRPODS_HOST = {6258.0, 6312.0, 6330.0}
+# AirPods 主機：類別4=4014（耳機）扣掉 6070=EarPods，其餘皆為 AirPods
+# 改用黑名單制，新機種上市（如 6285 Pro2、6330 Pro3）不會再漏算
+C4_AIRPODS_HOST = 4014.0
+C6_AIRPODS_EXCL = {6070.0}
 C3_AIRPODS_HOST = 3002.0
 
 
 def airpods_host_units(df: pd.DataFrame) -> int:
-    """AirPods 主機台數：類別6 ∈ {6258/6312/6330} 且 類別3=3002（SALE_TYPES 扣銷退）
+    """AirPods 主機台數：類別4=4014 且 類別6∉{6070} 且 類別3=3002（SALE_TYPES 扣銷退）
     與 fill_multistore_excel.py 各 BY店 sheet 的計算邏輯保持一致。
     """
-    m = df['類別6代碼'].isin(C6_AIRPODS_HOST) & (df['類別3代碼'] == C3_AIRPODS_HOST)
+    m = ((df['類別4代碼'] == C4_AIRPODS_HOST)
+         & ~df['類別6代碼'].isin(C6_AIRPODS_EXCL)
+         & (df['類別3代碼'] == C3_AIRPODS_HOST))
     sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
     ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
     return int(sale - ret)
