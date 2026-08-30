@@ -4,7 +4,7 @@
 核心計算邏輯沿用單店週報 v1.1.16 已驗證的規則：
   - NET = 銷售金額(含稅) + 銷退金額
   - SALE_TYPES = {'銷售', '尾款'}
-  - SAcare 用價目表 × 數量
+  - SAcare 用價目表 × 數量；價目表為 0 者（iMac / Mac mini 延長保固）改取 NET
   - 主機台數：類別3=3001 或 認證機品牌（881/885/886/888），SALE_TYPES - 銷退
   - 成交筆數：所有交易類型各算 1 筆（直接數列數）
 
@@ -40,9 +40,15 @@ C6_CPU         = {6001.0, 6002.0, 6007.0, 6008.0, 6342.0}  # 細項拆分用（M
 # 認證機品牌（跳過類別3篩選，只要品牌符合都算主機）
 CERT_BRANDS = {881.0, 885.0, 886.0, 888.0}
 
+# SA Care 中「金額不在價目表、而在交易資料裡」的類別6。
+# iMac(6532) / Mac mini(6546) 的價目表價格是 0，但 銷售金額(含稅) 欄有值，
+# 金額要直接取 NET。不要改用「價目表價格 == 0」判斷 —— 價目表另有
+# 99903084（iPad Air 13 M2 電商專用）價格也是 0，但它是不該計價，不是自帶金額。
+C6_SA_SELF_PRICED = {6532.0, 6546.0}
+
 # SACare 對應的類別6（for 搭售率分母做類別拆分用，這版只用總主機台數）
 C6_SA = {
-    'cpu':     {6533.0},
+    'cpu':     {6532.0, 6533.0, 6546.0},   # 6532=iMac, 6533=MacBook, 6546=Mac mini
     'ipad':    {6534.0},
     'iphone':  {6535.0},
     'watch':   {6536.0},
@@ -83,6 +89,28 @@ def fiscal_week(d: date) -> tuple[int, int]:
     days = (d - FISCAL_YEAR_START).days
     week_idx = days // 7  # 0-based
     return week_idx // 13 + 1, week_idx % 13 + 1
+
+
+def fiscal_period(d: date) -> tuple[int, int, int, date, date]:
+    """回傳 (財年, 季, 季內第幾週, 季起始日, 季結束日)。
+
+    財年以 52 週（364 天）為單位往前／往後滾動，所以 FISCAL_YEAR_START
+    不再只對 FY26 有效。季 = 13 個「週日～週六」，因此任何一週都完整落在
+    單一季內，不會出現橫跨兩季的週。
+
+    ⚠️ Apple 財年每隔幾年會有一個 53 週的年度，那一年之後用 364 天滾動會
+       偏一週。目前只用在近期週報，先不處理；真要跨到那麼遠時要改成查表。
+    """
+    days = (d - FISCAL_YEAR_START).days
+    fy_idx = days // 364 if days >= 0 else -((-days + 363) // 364)
+    fy_start = FISCAL_YEAR_START + timedelta(days=fy_idx * 364)
+    fy = FISCAL_YEAR_START.year + 1 + fy_idx      # FY26 起算
+    week_idx = (d - fy_start).days // 7           # 0-based，0~51
+    quarter = week_idx // 13 + 1
+    week_in_q = week_idx % 13 + 1
+    q_start = fy_start + timedelta(days=(quarter - 1) * 13 * 7)
+    q_end   = q_start + timedelta(days=13 * 7 - 1)
+    return fy, quarter, week_in_q, q_start, q_end
 
 
 def week_range(week_end: date) -> tuple[date, date]:
@@ -405,21 +433,42 @@ def threepp_revenue_excl_sacare(df: pd.DataFrame, sa_codes: set[str]) -> int:
 
 
 def sacare_revenue(df: pd.DataFrame, prices: dict[str, float]) -> int:
-    """SA Care 金額 = Σ(數量 × 價目表單價)，只算 SALE_TYPES，扣除銷退"""
+    """SA Care 金額：
+      類別6 ∈ C6_SA_SELF_PRICED（iMac / Mac mini）→ 直接取該列 NET
+        （價目表沒給價，金額本來就在交易資料裡；這類會出現訂金／尾款拆單，
+         所以只能取 NET，不能乘數量）
+      其餘 → 價目表單價 × 數量（只算 SALE_TYPES，扣除銷退）
+    """
     sa_rows = df[df['存貨代碼'].isin(prices.keys())].copy()
     if sa_rows.empty:
         return 0
-    sold = sa_rows[sa_rows['交易類型'].isin(SALE_TYPES)]
-    ret  = sa_rows[sa_rows['交易類型'] == '銷退']
+    self_priced = sa_rows['類別6代碼'].isin(C6_SA_SELF_PRICED)
+    priced      = sa_rows[~self_priced]
+    unpriced    = sa_rows[self_priced]
+    sold = priced[priced['交易類型'].isin(SALE_TYPES)]
+    ret  = priced[priced['交易類型'] == '銷退']
     sold_amt = (sold['存貨代碼'].map(prices) * sold['數量'].fillna(0)).sum()
     ret_amt  = (ret['存貨代碼'].map(prices) * ret['數量'].abs()).sum()
-    return int(sold_amt - ret_amt)
+    return int(sold_amt - ret_amt + unpriced['NET'].sum())
+
+
+# AC+ 檢測新機（維修換機時補的保固，不算業績）。
+# ⚠️ 只能用品名判斷，不能用 類別4=4071：26500252/253/254（iPad Pro M5、MBP 14" M5）
+#    品名是正常銷售卻被建檔成 4071，用類別4 排會誤刪正常業績。
+ACPP_CHECKNEW_KW = '維修專用檢測新機'
+
+
+def _acpp_base(df: pd.DataFrame) -> pd.Series:
+    """AC+ 共用底：類別3=3032，排除檢測新機"""
+    return (df['類別3代碼'] == 3032.0) & \
+        ~df['名稱'].astype(str).str.contains(ACPP_CHECKNEW_KW, na=False)
 
 
 def acpp_plus_revenue(df: pd.DataFrame) -> int:
-    """AC+ 金額 = 名稱含「代收保費- AppleCare+」的含稅金額（NET）"""
+    """AC+ 金額 = 名稱含「代收保費- AppleCare+」的含稅金額（NET），排除檢測新機"""
     m = df['名稱'].astype(str).str.contains('代收保費', na=False) & \
-        df['名稱'].astype(str).str.contains('AppleCare', case=False, na=False)
+        df['名稱'].astype(str).str.contains('AppleCare', case=False, na=False) & \
+        ~df['名稱'].astype(str).str.contains(ACPP_CHECKNEW_KW, na=False)
     return int(df.loc[m, 'NET'].sum())
 
 
@@ -440,22 +489,28 @@ def host_units(df: pd.DataFrame, c4_set: set[float] | None = None,
     return int(sale - ret)
 
 
+def mac_host_units_excl_cert(df: pd.DataFrame) -> int:
+    """Mac 主機台數，排除認證機：類別3=3001 且 類別4 ∈ C4_MAC_HOST。
+
+    專供「重點項目進度」的 AC+ 搭售佔比分母，與每日追蹤主機報表
+    (warranty_report_all.py) 排除認證機的口徑一致。
+    ⚠️ 與 cpu_units（host_units，含認證機品牌 881/885/886/888）刻意不同，
+       兩者不可互換 —— BY 各表的 CPU 台數仍用含認證機的版本。
+    """
+    m = (df['類別3代碼'] == 3001.0) & df['類別4代碼'].isin(C4_MAC_HOST)
+    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
+    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
+    return int(sale - ret)
+
+
 def txn_count(df: pd.DataFrame) -> int:
     """成交筆數 = distinct (單據代碼 × 交易類型) 組合數，對應門市單據分析報表邏輯"""
     return int(df[['單據代碼', '交易類型']].dropna(subset=['單據代碼']).drop_duplicates().shape[0])
 
 
-def acpp_units_total(df: pd.DataFrame) -> int:
-    """ACPP+ 台數 = 類別3=3032 的數量，扣除銷退"""
-    base = (df['類別3代碼'] == 3032.0)
-    sale = df.loc[base & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
-    ret  = df.loc[base & (df['交易類型'] == '銷退'), '數量'].abs().sum()
-    return int(sale - ret)
-
-
 def acpp_units_by_device(df: pd.DataFrame, keyword: str) -> int:
     """ACPP+ 台數（分類別）：類別3=3032 + 名稱含 keyword（mac/ipad/iphone/watch/airpods），扣除銷退"""
-    base = (df['類別3代碼'] == 3032.0) & \
+    base = _acpp_base(df) & \
         df['名稱'].astype(str).str.lower().str.contains(keyword.lower(), na=False)
     sale = df.loc[base & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
     ret  = df.loc[base & (df['交易類型'] == '銷退'), '數量'].abs().sum()
@@ -524,11 +579,11 @@ def calc_store_metrics(df: pd.DataFrame, start: date, end: date,
         'sa_rev':        sa_rev,                       # SA Care
         'acpp_plus':     acpp_plus_revenue(d),         # AC+ 金額
         'cpu_units':     host_units(d, c4_set=C4_MAC_HOST),
+        'cpu_units_excl_cert': mac_host_units_excl_cert(d),  # 重點項目進度 AC+ 分母用
         'iphone_units':  host_units(d, c4_set=C4_IPHONE_HOST),
         'ipad_units':    host_units(d, c4_set=C4_IPAD_HOST),
         'watch_units':   host_units(d, c4_set=C4_WATCH_HOST),
         'txn_count':     txn_count(d),
-        'acpp_total':    acpp_units_total(d),
         'acpp_mac':      acpp_units_by_device(d, 'mac'),
         'acpp_ipad':     acpp_units_by_device(d, 'ipad'),
         'acpp_iphone':   acpp_units_by_device(d, 'iphone'),
@@ -540,6 +595,7 @@ def calc_store_metrics(df: pd.DataFrame, start: date, end: date,
         'sa_watch':      sacare_units(d, C6_SA['watch'], sa_codes),
         'sa_airpods':    sacare_units(d, C6_SA['airpods'], sa_codes),
         'airpods_units': airpods_host_units(d),
+        'arpedia_units': arpedia_units(d),     # ARpedia 台數（品牌 496）
         'coupon_rev':    voucher_revenue(d),   # 禮券金額（高島屋禮券：類別6 6884/6888/6889）
     }
 
@@ -559,6 +615,18 @@ C6_PENCIL_THIRD = {6093.0}                           # 副廠筆
 C6_IPAD_KB      = {6088.0}                           # iPad 鍵盤
 C6_WATCH_BAND   = {6506.0}                           # Watch 錶帶
 C4_IPAD_ACC     = {4010.0, 4011.0}                  # iPad 配件 類別4
+
+# CPU（Mac）配件：一律限縮在 類別4=4007「CPU週邊配件」底下，避免抓到
+# 4012 通用週邊裡大量的 iPhone 充電線／MagSafe。類別6 名稱取自 EPB stkcat6。
+C4_CPU_ACC      = 4007.0
+C6_CPU_BAG      = {6057.0, 6058.0}   # 保護週邊-內袋 / 手提包（筆電包）
+C6_CPU_KBFILM   = {6064.0}           # 保護週邊-鍵盤膜
+C6_CPU_ADAPTER  = {6082.0, 6085.0}   # 線材週邊-充電/傳輸 + 其他（不含 6083 影像）
+C6_CPU_OFFICE   = {6038.0}           # 軟體-應用軟體（Office / Microsoft 365）
+# CPU 保貼沿用 C6_SCREEN_PROT
+
+# ARpedia：品牌代碼 496（與 daily-tracker/arpedia_daily_n2.py 的 query_units 同口徑）
+BRAND_ARPEDIA   = 496.0
 
 
 SACARE_CHECKNEW_CAT5 = 5807.0  # 090CaC SHOPPOSB 類別5：SACare 檢測新機
@@ -615,51 +683,52 @@ def accessory_units_revenue(df: pd.DataFrame,
     return units, revenue
 
 
-def ipad_pencil_first_units(df: pd.DataFrame) -> int:
-    """iPad 原廠筆件數：品牌=073、類別6=6001、名稱含 Pencil、排除名稱含「筆尖」"""
+def _units_revenue(df: pd.DataFrame, m) -> tuple[int, int]:
+    """給定布林遮罩，回傳 (件數, 金額)。
+    件數 = SALE_TYPES 銷售 − 銷退；金額 = signed NET 加總（與
+    accessory_units_revenue 同口徑，銷退列的 NET 本身就是負值）。
+    """
+    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
+    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
+    return int(sale - ret), int(df.loc[m, 'NET'].sum())
+
+
+def ipad_pencil_first_units(df: pd.DataFrame) -> tuple[int, int]:
+    """iPad 原廠筆：品牌=073、類別6=6001、名稱含 Pencil、排除名稱含「筆尖」
+    回傳 (件數, 金額)"""
     m = (df['品牌代碼'] == 73.0) & \
         df['類別6代碼'].isin(C6_PENCIL_FIRST) & \
         df['名稱'].astype(str).str.contains('Pencil', case=False, na=False) & \
         ~df['名稱'].astype(str).str.contains('筆尖', na=False)
-    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
-    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
-    return int(sale - ret)
+    return _units_revenue(df, m)
 
 
-def ipad_pencil_third_units(df: pd.DataFrame) -> int:
-    """iPad 副廠筆件數：類別3=3003、類別6=6093、排除名稱含「筆尖」"""
+def ipad_pencil_third_units(df: pd.DataFrame) -> tuple[int, int]:
+    """iPad 副廠筆：類別3=3003、類別6=6093、排除名稱含「筆尖」；回傳 (件數, 金額)"""
     m = (df['類別3代碼'] == 3003.0) & \
         df['類別6代碼'].isin(C6_PENCIL_THIRD) & \
         ~df['名稱'].astype(str).str.contains('筆尖', na=False)
-    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
-    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
-    return int(sale - ret)
+    return _units_revenue(df, m)
 
 
-def ipad_keyboard_units(df: pd.DataFrame) -> int:
-    """iPad 鍵盤件數：類別3=3003、類別6=6088"""
+def ipad_keyboard_units(df: pd.DataFrame) -> tuple[int, int]:
+    """iPad 鍵盤：類別3=3003、類別6=6088；回傳 (件數, 金額)"""
     m = (df['類別3代碼'] == 3003.0) & df['類別6代碼'].isin(C6_IPAD_KB)
-    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
-    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
-    return int(sale - ret)
+    return _units_revenue(df, m)
 
 
-def watch_screen_prot_units(df: pd.DataFrame) -> int:
-    """Watch 保貼件數：類別3=3003、類別4=4039、類別6=6077"""
+def watch_screen_prot_units(df: pd.DataFrame) -> tuple[int, int]:
+    """Watch 保貼：類別3=3003、類別4=4039、類別6=6077；回傳 (件數, 金額)"""
     m = (df['類別3代碼'] == 3003.0) & (df['類別4代碼'] == 4039.0) & \
         (df['類別6代碼'] == 6077.0)
-    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
-    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
-    return int(sale - ret)
+    return _units_revenue(df, m)
 
 
-def watch_band_units(df: pd.DataFrame) -> int:
-    """Watch 錶帶件數：類別3=3003、類別4=4039、類別6=6506"""
+def watch_band_units(df: pd.DataFrame) -> tuple[int, int]:
+    """Watch 錶帶：類別3=3003、類別4=4039、類別6=6506；回傳 (件數, 金額)"""
     m = (df['類別3代碼'] == 3003.0) & (df['類別4代碼'] == 4039.0) & \
         df['類別6代碼'].isin(C6_WATCH_BAND)
-    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
-    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
-    return int(sale - ret)
+    return _units_revenue(df, m)
 
 
 def calc_misc_metrics(df: pd.DataFrame, start: date, end: date,
@@ -694,17 +763,25 @@ def calc_misc_metrics(df: pd.DataFrame, start: date, end: date,
     iphone_lens_qty, iphone_lens_rev     = accessory_units_revenue(d, 4009.0, C6_LENS_PROT)
 
     # iPad 配件
-    ipad_host              = host_units(d, c4_set=C4_IPAD_HOST)
-    ipad_pencil1           = ipad_pencil_first_units(d)
-    ipad_pencil3           = ipad_pencil_third_units(d)
-    ipad_prot_qty, _       = accessory_units_revenue(d, C4_IPAD_ACC, C6_SCREEN_PROT)
-    ipad_case_qty, _       = accessory_units_revenue(d, C4_IPAD_ACC, C6_CASE)
-    ipad_kb                = ipad_keyboard_units(d)
+    ipad_host                        = host_units(d, c4_set=C4_IPAD_HOST)
+    ipad_pencil1, ipad_pencil1_rev   = ipad_pencil_first_units(d)
+    ipad_pencil3, ipad_pencil3_rev   = ipad_pencil_third_units(d)
+    ipad_prot_qty, ipad_prot_rev     = accessory_units_revenue(d, C4_IPAD_ACC, C6_SCREEN_PROT)
+    ipad_case_qty, ipad_case_rev     = accessory_units_revenue(d, C4_IPAD_ACC, C6_CASE)
+    ipad_kb, ipad_kb_rev             = ipad_keyboard_units(d)
 
     # Watch 配件
     watch_host = host_units(d, c4_set=C4_WATCH_HOST)
-    watch_prot = watch_screen_prot_units(d)
-    watch_band = watch_band_units(d)
+    watch_prot, watch_prot_rev = watch_screen_prot_units(d)
+    watch_band, watch_band_rev = watch_band_units(d)
+
+    # CPU（Mac）配件 —— 分母用 Mac 主機台數，與 calc_store_metrics 的 cpu_units 同定義
+    cpu_host                            = host_units(d, c4_set=C4_MAC_HOST)
+    cpu_prot_qty, cpu_prot_rev          = accessory_units_revenue(d, C4_CPU_ACC, C6_SCREEN_PROT)
+    cpu_bag_qty, cpu_bag_rev            = accessory_units_revenue(d, C4_CPU_ACC, C6_CPU_BAG)
+    cpu_kbfilm_qty, cpu_kbfilm_rev      = accessory_units_revenue(d, C4_CPU_ACC, C6_CPU_KBFILM)
+    cpu_adapter_qty, cpu_adapter_rev    = accessory_units_revenue(d, C4_CPU_ACC, C6_CPU_ADAPTER)
+    cpu_office_qty, cpu_office_rev      = accessory_units_revenue(d, C4_CPU_ACC, C6_CPU_OFFICE)
 
     return {
         'sa_mac': sa_mac, 'sa_iphone': sa_iphone, 'sa_ipad': sa_ipad,
@@ -718,10 +795,20 @@ def calc_misc_metrics(df: pd.DataFrame, start: date, end: date,
         'iphone_case_qty': iphone_case_qty, 'iphone_case_rev': iphone_case_rev,
         'iphone_lens_qty': iphone_lens_qty, 'iphone_lens_rev': iphone_lens_rev,
         'ipad_host': ipad_host,
-        'ipad_pencil1': ipad_pencil1, 'ipad_pencil3': ipad_pencil3,
-        'ipad_prot_qty': ipad_prot_qty, 'ipad_case_qty': ipad_case_qty,
-        'ipad_kb': ipad_kb,
-        'watch_host': watch_host, 'watch_prot': watch_prot, 'watch_band': watch_band,
+        'ipad_pencil1': ipad_pencil1, 'ipad_pencil1_rev': ipad_pencil1_rev,
+        'ipad_pencil3': ipad_pencil3, 'ipad_pencil3_rev': ipad_pencil3_rev,
+        'ipad_prot_qty': ipad_prot_qty, 'ipad_prot_rev': ipad_prot_rev,
+        'ipad_case_qty': ipad_case_qty, 'ipad_case_rev': ipad_case_rev,
+        'ipad_kb': ipad_kb, 'ipad_kb_rev': ipad_kb_rev,
+        'watch_host': watch_host,
+        'watch_prot': watch_prot, 'watch_prot_rev': watch_prot_rev,
+        'watch_band': watch_band, 'watch_band_rev': watch_band_rev,
+        'cpu_host': cpu_host,
+        'cpu_prot_qty': cpu_prot_qty,       'cpu_prot_rev': cpu_prot_rev,
+        'cpu_bag_qty': cpu_bag_qty,         'cpu_bag_rev': cpu_bag_rev,
+        'cpu_kbfilm_qty': cpu_kbfilm_qty,   'cpu_kbfilm_rev': cpu_kbfilm_rev,
+        'cpu_adapter_qty': cpu_adapter_qty, 'cpu_adapter_rev': cpu_adapter_rev,
+        'cpu_office_qty': cpu_office_qty,   'cpu_office_rev': cpu_office_rev,
     }
 
 
@@ -740,6 +827,14 @@ def airpods_host_units(df: pd.DataFrame) -> int:
     m = ((df['類別4代碼'] == C4_AIRPODS_HOST)
          & ~df['類別6代碼'].isin(C6_AIRPODS_EXCL)
          & (df['類別3代碼'] == C3_AIRPODS_HOST))
+    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
+    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
+    return int(sale - ret)
+
+
+def arpedia_units(df: pd.DataFrame) -> int:
+    """ARpedia 銷售台數：品牌代碼=496（SALE_TYPES 銷售扣銷退）"""
+    m = df['品牌代碼'] == BRAND_ARPEDIA
     sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
     ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
     return int(sale - ret)
@@ -808,15 +903,15 @@ def calc_person_metrics(df: pd.DataFrame, start: date, end: date,
         iphone_lens, _ = accessory_units_revenue(ed, 4009.0, C6_LENS_PROT)
 
         # ── iPad 配件 ──
-        ipad_pencil1 = ipad_pencil_first_units(ed)
-        ipad_pencil3 = ipad_pencil_third_units(ed)
+        ipad_pencil1, _ = ipad_pencil_first_units(ed)
+        ipad_pencil3, _ = ipad_pencil_third_units(ed)
         ipad_prot, _ = accessory_units_revenue(ed, C4_IPAD_ACC, C6_SCREEN_PROT)
         ipad_case, _ = accessory_units_revenue(ed, C4_IPAD_ACC, C6_CASE)
-        ipad_kb      = ipad_keyboard_units(ed)
+        ipad_kb,      _ = ipad_keyboard_units(ed)
 
         # ── Watch 配件 ──
-        watch_prot = watch_screen_prot_units(ed)
-        watch_band = watch_band_units(ed)
+        watch_prot, _ = watch_screen_prot_units(ed)
+        watch_band, _ = watch_band_units(ed)
 
         # ── AirPods 配件 ──
         apo_acc = airpods_acc_units(ed)
