@@ -960,15 +960,27 @@ def fy_week(d: date) -> tuple[int, int, int]:
     return fy, (n - 1) // 13 + 2, (n - 1) % 13 + 1
 
 
+def snap_week_end(d: date) -> date:
+    """把任意日期對齊到它所屬那一週（週日~週六）的週六。
+
+    週報的日期欄只是 <input type="date">，沒擋非週六；不對齊的話整組
+    財年週界線會跟著歪掉（例如變成週四~週四）而且不會報錯。
+    """
+    return d + timedelta(days=(5 - d.weekday()) % 7)
+
+
 def class_week_columns(wk_end: date) -> list[tuple[str, date, date]]:
-    """wk_end 所屬財年季的欄位定義：上一季 W13 參考欄 + 本季 W01~W13。
+    """wk_end 所屬財年季的欄位定義：上一季末週參考欄 + 本季 W01~W13。
 
     回傳 [(標題, 週起, 週迄), ...]，週起=週日、週迄=週六。
     """
+    wk_end = snap_week_end(wk_end)
     fy, q, wk = fy_week(wk_end)
     q_w1_end = wk_end - timedelta(days=7 * (wk - 1))          # 本季 W01 的週六
     n_weeks = 14 if (q == 1 and fy_week(q_w1_end + timedelta(days=7 * 13))[2] == 14) else 13
-    cols = [('W13', q_w1_end - timedelta(days=13), q_w1_end - timedelta(days=7))]
+    # 參考欄＝上一季最後一週。53 週財年的 Q1 有 14 週，所以標題不能寫死 W13。
+    prev_end = q_w1_end - timedelta(days=7)
+    cols = [(f'W{fy_week(prev_end)[2]:02d}', prev_end - timedelta(days=6), prev_end)]
     for i in range(n_weeks):
         end = q_w1_end + timedelta(days=7 * i)
         cols.append((f'W{i + 1:02d}', end - timedelta(days=6), end))
@@ -1035,15 +1047,23 @@ def units_by_class_week(df: pd.DataFrame, wk_end: date, mapping: dict):
     sign = df['數量'].where(df['交易類型'].isin(SALE_TYPES),
                            -df['數量'].abs().where(df['交易類型'] == '銷退', 0))
     sign = sign.where(df['交易類型'].isin(SALE_TYPES | {'銷退'}), 0)
-    span = (d >= cols[0][1]) & (d <= cols[-1][2])
+    span = (d >= cols[0][1]) & (d <= min(cols[-1][2], wk_end))
 
     ignore = [float(x) for x in mapping.get('ignore_cat6', [])]
     if ignore:
         keep = ~df['類別6代碼'].isin(ignore)
         sign = sign.where(keep, 0)
 
+    # 只統計到報表週為止：勾「月累積延伸到月底」時資料會載入到月底，
+    # 不設限就會讓「還沒過完的下一週」冒出半週數字，與標題的「截至 Wxx」打架。
     def weeks(mask):
-        return [int(sign[mask & (d >= s) & (d <= e)].sum()) for _, s, e in cols]
+        out = []
+        for _, s, e in cols:
+            if s > wk_end:
+                out.append(0)
+            else:
+                out.append(int(sign[mask & (d >= s) & (d <= min(e, wk_end))].sum()))
+        return out
 
     items, scopes = _class_masks(df, mapping)
     covered = pd.Series(False, index=df.index)

@@ -1017,7 +1017,7 @@ def _fill_class_weeks(wb, df, wk_end: date, log):
 
     mapping = json.loads(CLASS_MAP_FILE.read_text(encoding='utf-8'))
     cols, rows = eng.units_by_class_week(df, wk_end, mapping)
-    fy, q, wk = eng.fy_week(wk_end)
+    fy, q, wk = eng.fy_week(eng.snap_week_end(wk_end))
 
     if CLASS_SHEET in wb.sheetnames:
         del wb[CLASS_SHEET]
