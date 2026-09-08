@@ -163,7 +163,41 @@ def _ensure_token(username, password, log, force=False):
     return _token["authToken"], _token["tenantId"]
 
 
-def _query_daily(site_id, start: date, end: date, auth, tenant):
+DNS_HINT = (
+    "DNS 解析失敗（macOS 名稱快取卡住，非本工具問題）。請在終端機執行：\n"
+    "    sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\n"
+    "  然後重跑。")
+
+
+def _is_dns_error(e):
+    """區分「名稱解析不出來」與其他網路錯誤（前者重試無用）。"""
+    import socket
+    if isinstance(getattr(e, "reason", None), socket.gaierror) or isinstance(e, socket.gaierror):
+        return True
+    return "nodename nor servname" in str(e) or "Name or service not known" in str(e)
+
+
+def _urlopen_retry(req, ctx, log, tries=2):
+    """短暫的網路抖動重試；DNS 解析失敗直接放棄並給明確指示。
+    注意：單次逾時 120 秒，tries 別調大，否則多店查詢會拖很久。"""
+    import urllib.request, urllib.error, socket, time
+    last = None
+    for i in range(tries):
+        try:
+            return urllib.request.urlopen(req, timeout=120, context=ctx)
+        except urllib.error.HTTPError:
+            raise                       # HTTP 狀態碼交給呼叫端（含 401 換 token）
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            if _is_dns_error(e):
+                raise ShopperTrakError(DNS_HINT) from e
+            last = e
+            if i < tries - 1:
+                log(f"  連線失敗（{e}），{2 * (i + 1)} 秒後重試 {i + 2}/{tries}")
+                time.sleep(2 * (i + 1))
+    raise last
+
+
+def _query_daily(site_id, start: date, end: date, auth, tenant, log):
     """打 REST API 取每日 traffic，回傳 {date: traffic}。"""
     import urllib.request, json as _json, ssl
     # 公司 VPN(Fortinet) 會做 SSL 檢查插入自簽憑證 → 關閉憑證驗證才連得到
@@ -182,7 +216,7 @@ def _query_daily(site_id, start: date, end: date, auth, tenant):
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {auth}", "tenant": tenant,
         "Content-Type": "application/json", "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=120, context=_ctx) as r:
+    with _urlopen_retry(req, _ctx, log) as r:
         if r.status in (401, 419):
             raise PermissionError("token expired")
         data = _json.loads(r.read().decode("utf-8"))
@@ -193,20 +227,28 @@ def _query_daily(site_id, start: date, end: date, auth, tenant):
 def fetch_all(store_codes, start: date, end: date, username, password, log):
     """登入並抓多店每日來客數，回傳 {storeCode: {date: traffic}}。失敗丟 ShopperTrakError。"""
     auth, tenant = _ensure_token(username, password, log)
-    out = {}
+    out, failed = {}, []
     for code in store_codes:
         site = SITE_IDS.get(code)
         if not site:
             continue
         try:
             try:
-                days = _query_daily(site, start, end, auth, tenant)
+                days = _query_daily(site, start, end, auth, tenant, log)
             except PermissionError:
                 auth, tenant = _ensure_token(username, password, log, force=True)
-                days = _query_daily(site, start, end, auth, tenant)
+                days = _query_daily(site, start, end, auth, tenant, log)
             if days:
                 out[code] = days
                 log(f"  來客數 {code}: {len(days)} 天")
+            else:
+                failed.append(code)
+                log(f"  來客數 {code}：查無資料")
+        except ShopperTrakError:
+            raise                       # DNS 這類問題每店都會一樣，不必重複跑完
         except Exception as e:
+            failed.append(code)
             log(f"  來客數 {code} 失敗：{e}")
+    if failed:
+        log(f"  ⚠️  以下門市無人流資料，報表該欄將留空：{'、'.join(failed)}")
     return out
