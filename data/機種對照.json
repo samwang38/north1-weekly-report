@@ -1,0 +1,257 @@
+{
+  "_說明": "機種週別台數表對照。cat6 = 類別6代碼；stk_id = 存貨代碼（HomePod/Pencil 無法用 cat6 區分正貨與 DEMO/保固，故列料號）。改機種時只動這裡。",
+  "groups": [
+    {
+      "name": "CPU 合計",
+      "scope": {
+        "cat3": 3001,
+        "cat4_min": 4001,
+        "cat4_max": 4002
+      },
+      "classes": [
+        {
+          "label": "iMac",
+          "cat6": [
+            6001
+          ]
+        },
+        {
+          "label": "Mac mini",
+          "cat6": [
+            6002
+          ]
+        },
+        {
+          "label": "Mac Studio",
+          "cat6": [
+            6277
+          ]
+        },
+        {
+          "label": "Macbook Pro 14吋",
+          "cat6": [
+            6342
+          ]
+        },
+        {
+          "label": "Macbook Pro 16吋",
+          "cat6": [
+            6343
+          ]
+        },
+        {
+          "label": "Macbook Air",
+          "cat6": [
+            6340
+          ]
+        },
+        {
+          "label": "Macbook Air 15吋",
+          "cat6": [
+            6341
+          ]
+        },
+        {
+          "label": "Macbook Neo",
+          "cat6": [
+            6344
+          ]
+        }
+      ]
+    },
+    {
+      "name": "音頻合計",
+      "scope": {
+        "brand": 73,
+        "cat4": 4014,
+        "cat5_not_in": [
+          5035
+        ]
+      },
+      "classes": [
+        {
+          "label": "AirPods Pro 3",
+          "cat6": [
+            6330
+          ]
+        },
+        {
+          "label": "AirPods 4",
+          "cat6": [
+            6312
+          ]
+        },
+        {
+          "label": "AirPods Max 2",
+          "cat6": [
+            6258
+          ]
+        }
+      ]
+    },
+    {
+      "name": "音頻合計",
+      "scope": {
+        "brand": 73,
+        "cat4": 4066,
+        "name_not_like": [
+          "DEMO"
+        ]
+      },
+      "classes": [
+        {
+          "label": "HomePod&mini",
+          "cat6": [
+            6073
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AppleWatch 合計",
+      "scope": {
+        "cat4": 4038
+      },
+      "classes": [
+        {
+          "label": "AppleWatch SE 2025",
+          "cat6": [
+            6329
+          ]
+        },
+        {
+          "label": "AppleWatch S11",
+          "cat6": [
+            6327
+          ]
+        },
+        {
+          "label": "AppleWatch Ultra 3",
+          "cat6": [
+            6328
+          ]
+        }
+      ]
+    },
+    {
+      "name": "iPhone 合計",
+      "scope": {
+        "cat4": 4004
+      },
+      "classes": [
+        {
+          "label": "iPhone 17",
+          "cat6": [
+            6323
+          ]
+        },
+        {
+          "label": "iPhone Air",
+          "cat6": [
+            6324
+          ]
+        },
+        {
+          "label": "iPhone 17 Pro",
+          "cat6": [
+            6325
+          ]
+        },
+        {
+          "label": "iPhone 17 Pro Max",
+          "cat6": [
+            6326
+          ]
+        },
+        {
+          "label": "iPhone 17e",
+          "cat6": [
+            6335
+          ]
+        }
+      ]
+    },
+    {
+      "name": "iPad 合計",
+      "scope": {
+        "cat3": 3001,
+        "cat4_in": [
+          4005,
+          4006,
+          4041
+        ]
+      },
+      "classes": [
+        {
+          "label": "iPad 2025",
+          "cat6": [
+            6321,
+            6322
+          ]
+        },
+        {
+          "label": "iPad Air 2026 11\"",
+          "cat6": [
+            6336,
+            6337
+          ]
+        },
+        {
+          "label": "iPad Air 2026 13\"",
+          "cat6": [
+            6338,
+            6339
+          ]
+        },
+        {
+          "label": "iPad mini 7",
+          "cat6": [
+            6313,
+            6314
+          ]
+        },
+        {
+          "label": "iPad Pro 2025 11\"",
+          "cat6": [
+            6331,
+            6332
+          ]
+        },
+        {
+          "label": "iPad Pro 2025 13\"",
+          "cat6": [
+            6333,
+            6334
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Apple Pencil 合計",
+      "scope": {
+        "brand": 73,
+        "cat5": 5039
+      },
+      "classes": [
+        {
+          "label": "Apple Pencil 第二代",
+          "stk_id": [
+            "07311729"
+          ]
+        },
+        {
+          "label": "Apple Pencil Pro",
+          "stk_id": [
+            "07310512"
+          ]
+        },
+        {
+          "label": "Apple Pencil USB-C",
+          "stk_id": [
+            "07310018"
+          ]
+        }
+      ]
+    }
+  ]
+}

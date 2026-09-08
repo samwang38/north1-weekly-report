@@ -936,3 +936,110 @@ def calc_person_metrics(df: pd.DataFrame, start: date, end: date,
             'spk_with':     spk_with,     'spk_without':  spk_without,
         })
     return results
+
+
+# ---------------------------------------------------------------------------
+# 機種週別台數（Apple 財年週 W01~W13 + 上一季 W13 參考欄）
+# ---------------------------------------------------------------------------
+
+def fy_end(year: int) -> date:
+    """Apple 財年結束日 = 該年 9 月最後一個週六。"""
+    d = date(year, 9, 30)
+    return d - timedelta(days=(d.weekday() - 5) % 7)
+
+
+def fy_week(d: date) -> tuple[int, int, int]:
+    """回傳 (財年, 季, 該季第幾週)。53 週的財年 Q1 為 14 週。"""
+    fy = d.year if d <= fy_end(d.year) else d.year + 1
+    start = fy_end(fy - 1) + timedelta(days=1)
+    wk = (d - start).days // 7 + 1
+    q1 = 14 if ((fy_end(fy) - start).days + 1) // 7 == 53 else 13
+    if wk <= q1:
+        return fy, 1, wk
+    n = wk - q1
+    return fy, (n - 1) // 13 + 2, (n - 1) % 13 + 1
+
+
+def class_week_columns(wk_end: date) -> list[tuple[str, date, date]]:
+    """wk_end 所屬財年季的欄位定義：上一季 W13 參考欄 + 本季 W01~W13。
+
+    回傳 [(標題, 週起, 週迄), ...]，週起=週日、週迄=週六。
+    """
+    fy, q, wk = fy_week(wk_end)
+    q_w1_end = wk_end - timedelta(days=7 * (wk - 1))          # 本季 W01 的週六
+    n_weeks = 14 if (q == 1 and fy_week(q_w1_end + timedelta(days=7 * 13))[2] == 14) else 13
+    cols = [('W13', q_w1_end - timedelta(days=13), q_w1_end - timedelta(days=7))]
+    for i in range(n_weeks):
+        end = q_w1_end + timedelta(days=7 * i)
+        cols.append((f'W{i + 1:02d}', end - timedelta(days=6), end))
+    return cols
+
+
+def _class_masks(df: pd.DataFrame, mapping: dict):
+    """依對照表產生 (群組, 標籤, mask) 清單與各群組的 scope mask。"""
+    def scope_mask(sc):
+        # 認證機一律不計入機種表（與每日追蹤主機報表口徑一致）
+        m = ~df['品牌代碼'].isin(CERT_BRANDS)
+        if 'cat3' in sc:     m &= df['類別3代碼'] == float(sc['cat3'])
+        if 'cat4' in sc:     m &= df['類別4代碼'] == float(sc['cat4'])
+        if 'cat4_in' in sc:  m &= df['類別4代碼'].isin([float(x) for x in sc['cat4_in']])
+        if 'cat5' in sc:     m &= df['類別5代碼'] == float(sc['cat5'])
+        if 'cat5_not_in' in sc: m &= ~df['類別5代碼'].isin([float(x) for x in sc['cat5_not_in']])
+        if 'cat4_min' in sc: m &= df['類別4代碼'] >= float(sc['cat4_min'])
+        if 'cat4_max' in sc: m &= df['類別4代碼'] <= float(sc['cat4_max'])
+        if 'cat6_in' in sc:  m &= df['類別6代碼'].isin([float(x) for x in sc['cat6_in']])
+        if 'brand' in sc:    m &= df['品牌代碼'] == float(sc['brand'])
+        for kw in sc.get('name_not_like', []):
+            m &= ~df['名稱'].str.upper().str.contains(kw.upper(), regex=False, na=False)
+        return m
+
+    items, scopes = [], []
+    for g in mapping['groups']:
+        sm = scope_mask(g.get('scope', {}))
+        scopes.append(sm)
+        for c in g['classes']:
+            if 'cat6' in c:
+                m = df['類別6代碼'].isin([float(x) for x in c['cat6']])
+            else:
+                m = df['存貨代碼'].isin(c['stk_id'])
+            items.append((g['name'], c['label'], sm & m))
+    return items, scopes
+
+
+def units_by_class_week(df: pd.DataFrame, wk_end: date, mapping: dict):
+    """各機種 × 財年週台數。台數 = SALE_TYPES(銷售+尾款) − 銷退，與 host_units 同口徑。
+
+    回傳 (cols, rows, unmapped)：
+      cols     = [(標題, 起, 迄), ...]，第一欄為上一季 W13 參考欄
+      rows     = [{'group':.., 'label':.., 'units':[各欄台數]}, ...] 依對照表順序
+      unmapped = [(cat6, 名稱, 台數), ...] 落在 scope 內但沒對到任何機種的品項
+    """
+    cols = class_week_columns(wk_end)
+    d = df['單據日期'].dt.date
+    sign = df['數量'].where(df['交易類型'].isin(SALE_TYPES),
+                           -df['數量'].abs().where(df['交易類型'] == '銷退', 0))
+    sign = sign.where(df['交易類型'].isin(SALE_TYPES | {'銷退'}), 0)
+
+    items, scopes = _class_masks(df, mapping)
+    rows = []
+    for group, label, m in items:
+        units = [int(sign[m & (d >= s) & (d <= e)].sum()) for _, s, e in cols]
+        rows.append({'group': group, 'label': label, 'units': units})
+
+    covered = pd.Series(False, index=df.index)
+    for _, _, m in items:
+        covered |= m
+    in_scope = pd.Series(False, index=df.index)
+    for sm in scopes:
+        in_scope |= sm
+    span = (d >= cols[0][1]) & (d <= cols[-1][2])
+    leak = in_scope & ~covered & span & (sign != 0)
+    unmapped = []
+    if leak.any():
+        g = df.loc[leak].groupby(['類別6代碼', '名稱'])
+        for (c6, name), idx in g.groups.items():
+            q = int(sign[idx].sum())
+            if q:
+                unmapped.append((c6, name, q))
+        unmapped.sort(key=lambda x: -abs(x[2]))
+    return cols, rows, unmapped

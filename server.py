@@ -12,6 +12,7 @@ STATIC_ROOT  = ROOT / 'static'
 TEMPLATE     = ROOT / 'template' / '北一區週報_優化.xlsx'
 SA_FILE      = ROOT / 'data' / 'SAcare對應價目表.xlsx'
 TRAFFIC_FILE = ROOT / 'data' / 'traffic_cache.json'
+CLASS_MAP_FILE = ROOT / 'data' / '機種對照.json'
 LOCAL_CONFIG = ROOT / 'local_config.json'   # 帳密/編制人數，不上 git
 
 
@@ -175,8 +176,11 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     # 1 月的週報「上週/上月/上月同期」落在去年 12 月，起始日也要往前延伸才不會整欄變 0
     # QTD_START 必須納入：跨年的季（如 FY27 Q2 起於 2026-12-27）會早於 YTD_S_CY，
     # 漏掉就是「1 月週報缺料」那類截斷 bug 的翻版。
+    # 機種週別台數要多帶「上一季 W13」參考欄，比 QTD_START 還早一週
+    CLS_COLS  = eng.class_week_columns(wk_end)
+    CLS_START = CLS_COLS[0][1]
     cy_start = min(YTD_S_CY, WK_START, PW_START, MTD_START, PM_START, PM_SAME_START,
-                   QTD_START)
+                   QTD_START, CLS_START)
     df_cy = eng.load_from_epb(cy_start, cy_end, store_codes=STORE_CODES)
     log(f'  今年資料：{len(df_cy):,} 筆')
 
@@ -987,6 +991,9 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     for c in (24, 26, 28): ws_yoy.cell(3, c).value = ytd_ly_ymd
     for c in (25, 27, 29): ws_yoy.cell(3, c).value = ytd_cy_ymd
 
+    # ── 機種週別台數 ──
+    _fill_class_weeks(wb, df_cy, wk_end, log)
+
     # ── 結構自我檢查（抓「填錯格子 / 範本跑版」這類默默出錯）──
     _verify_structure(wb, rows_stores, log)
 
@@ -995,6 +1002,101 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     wb.save(buf)
     return buf.getvalue()
 
+
+
+CLASS_SHEET = '機種週別台數'
+
+
+def _fill_class_weeks(wb, df, wk_end: date, log):
+    """產生「機種週別台數」分頁：各機種 × Apple 財年週 W01~W13（+上一季 W13 參考欄）。
+
+    列是依 data/機種對照.json 動態產生的，不吃範本寫死的列位置；
+    Total 與各群組合計都用 Excel 公式，改數字會自動重算。
+    """
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    mapping = json.loads(CLASS_MAP_FILE.read_text(encoding='utf-8'))
+    cols, rows, unmapped = eng.units_by_class_week(df, wk_end, mapping)
+    fy, q, wk = eng.fy_week(wk_end)
+
+    if CLASS_SHEET in wb.sheetnames:
+        del wb[CLASS_SHEET]
+    ws = wb.create_sheet(CLASS_SHEET)
+
+    HEAD = PatternFill('solid', fgColor='FF1B6FD4')
+    SUBT = PatternFill('solid', fgColor='FF2E86E0')
+    TOTF = PatternFill('solid', fgColor='FF5AA9EE')
+    WHITE = Font(bold=True, color='FFFFFFFF')
+    THIN = Side(style='thin', color='FFBFBFBF')
+    BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+    CENTER = Alignment(horizontal='center', vertical='center')
+    n_col = len(cols)                       # 參考欄 + 本季各週
+    last_c = n_col + 2                      # A=機種名, 末欄=Total
+
+    ws.cell(1, 1).value = (f'Apple 主機銷售台數  ·  FY{fy} Q{q}  '
+                           f'({cols[1][1]:%m/%d}~{cols[-1][2]:%m/%d})  ·  截至 W{wk:02d}')
+    ws.cell(1, 1).font = Font(bold=True, size=13)
+
+    ws.cell(2, 1).value = 'Class Name'
+    for i, (label, s_d, e_d) in enumerate(cols):
+        c = ws.cell(2, i + 2)
+        c.value = label
+        c.comment = None
+        ws.cell(3, i + 2).value = f'{s_d:%m/%d}~{e_d:%m/%d}'
+    ws.cell(2, last_c).value = 'Total'
+    ws.cell(3, 1).value = '（首欄 W13 為上一季末週參考，不計入 Total）'
+    for c in range(1, last_c + 1):
+        h = ws.cell(2, c)
+        h.fill, h.font, h.alignment, h.border = HEAD, WHITE, CENTER, BORDER
+        ws.cell(3, c).alignment = CENTER
+        ws.cell(3, c).font = Font(size=8, color='FF808080')
+
+    r = 4
+    group_rows = {}
+    for row in rows:
+        group_rows.setdefault(row['group'], []).append(row)
+
+    for group, members in group_rows.items():
+        first = r
+        for member in members:
+            ws.cell(r, 1).value = member['label']
+            for i, u in enumerate(member['units']):
+                cell = ws.cell(r, i + 2)
+                cell.value = u if u else None
+                cell.alignment, cell.border = CENTER, BORDER
+            ws.cell(r, last_c).value = f'=SUM(C{r}:{chr(64 + n_col + 1)}{r})'
+            ws.cell(r, last_c).alignment = CENTER
+            ws.cell(r, 1).border = BORDER
+            ws.cell(r, last_c).border = BORDER
+            r += 1
+        ws.cell(r, 1).value = group
+        for c in range(2, last_c + 1):
+            col = chr(64 + c)
+            ws.cell(r, c).value = f'=SUM({col}{first}:{col}{r - 1})'
+        for c in range(1, last_c + 1):
+            cell = ws.cell(r, c)
+            cell.fill = TOTF if c == last_c else SUBT
+            cell.font, cell.alignment, cell.border = WHITE, CENTER, BORDER
+        ws.cell(r, 1).alignment = Alignment(horizontal='left', vertical='center')
+        r += 1
+
+    ws.column_dimensions['A'].width = 22
+    for c in range(2, last_c + 1):
+        ws.column_dimensions[chr(64 + c)].width = 7.5
+    ws.freeze_panes = 'B4'
+
+    if unmapped:
+        r += 1
+        ws.cell(r, 1).value = '⚠️ 未對應品項（落在主機/音頻/Pencil 範圍內但不屬於任何機種，未計入上表）'
+        ws.cell(r, 1).font = Font(bold=True, color='FFC00000')
+        r += 1
+        for c6, name, qty in unmapped:
+            ws.cell(r, 1).value = f'cat6 {int(c6)}'
+            ws.cell(r, 2).value = name
+            ws.cell(r, last_c).value = qty
+            r += 1
+        log(f'  ⚠️ 機種表有 {len(unmapped)} 項未對應，已列在分頁下方')
+    log(f'機種週別台數：FY{fy} Q{q} W01~W{len(cols) - 1:02d}，{len(rows)} 個機種')
 
 def _verify_structure(wb, rows_stores, log):
     """產報前驗證版面：店名是否落在正確列、分頁是否齊全、日期是否有填。
