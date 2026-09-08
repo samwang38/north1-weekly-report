@@ -1,5 +1,7 @@
 {
   "_說明": "機種週別台數表對照。cat6 = 類別6代碼；stk_id = 存貨代碼（HomePod/Pencil 無法用 cat6 區分正貨與 DEMO/保固，故列料號）。改機種時只動這裡。",
+  "_ignore說明": "放進 ignore_cat6 的 cat6 完全不計入（連自動成列都不會）。用在確定不想算的舊機/雜項。",
+  "ignore_cat6": [],
   "groups": [
     {
       "name": "CPU 合計",

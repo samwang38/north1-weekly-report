@@ -1016,7 +1016,7 @@ def _fill_class_weeks(wb, df, wk_end: date, log):
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     mapping = json.loads(CLASS_MAP_FILE.read_text(encoding='utf-8'))
-    cols, rows, unmapped = eng.units_by_class_week(df, wk_end, mapping)
+    cols, rows = eng.units_by_class_week(df, wk_end, mapping)
     fy, q, wk = eng.fy_week(wk_end)
 
     if CLASS_SHEET in wb.sheetnames:
@@ -1027,6 +1027,7 @@ def _fill_class_weeks(wb, df, wk_end: date, log):
     SUBT = PatternFill('solid', fgColor='FF2E86E0')
     TOTF = PatternFill('solid', fgColor='FF5AA9EE')
     WHITE = Font(bold=True, color='FFFFFFFF')
+    AUTO = PatternFill('solid', fgColor='FFFFF2CC')   # 對照表沒列到的新機
     THIN = Side(style='thin', color='FFBFBFBF')
     BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
     CENTER = Alignment(horizontal='center', vertical='center')
@@ -1064,6 +1065,11 @@ def _fill_class_weeks(wb, df, wk_end: date, log):
                 cell = ws.cell(r, i + 2)
                 cell.value = u if u else None
                 cell.alignment, cell.border = CENTER, BORDER
+                if member['auto']:
+                    cell.fill = AUTO
+            if member['auto']:
+                ws.cell(r, 1).fill = AUTO
+                ws.cell(r, last_c).fill = AUTO
             ws.cell(r, last_c).value = f'=SUM(C{r}:{chr(64 + n_col + 1)}{r})'
             ws.cell(r, last_c).alignment = CENTER
             ws.cell(r, 1).border = BORDER
@@ -1085,17 +1091,14 @@ def _fill_class_weeks(wb, df, wk_end: date, log):
         ws.column_dimensions[chr(64 + c)].width = 7.5
     ws.freeze_panes = 'B4'
 
-    if unmapped:
+    autos = [x['label'] for x in rows if x['auto']]
+    if autos:
         r += 1
-        ws.cell(r, 1).value = '⚠️ 未對應品項（落在主機/音頻/Pencil 範圍內但不屬於任何機種，未計入上表）'
-        ws.cell(r, 1).font = Font(bold=True, color='FFC00000')
-        r += 1
-        for c6, name, qty in unmapped:
-            ws.cell(r, 1).value = f'cat6 {int(c6)}'
-            ws.cell(r, 2).value = name
-            ws.cell(r, last_c).value = qty
-            r += 1
-        log(f'  ⚠️ 機種表有 {len(unmapped)} 項未對應，已列在分頁下方')
+        ws.cell(r, 1).value = ('黃底 = 對照表沒列到的新機，已用 EPB 分類名稱暫代並計入合計。'
+                               '要正名或改不計，改 data/機種對照.json。')
+        ws.cell(r, 1).font = Font(bold=True, color='FFBF8F00')
+        log(f'  ⚠️ 機種表有 {len(autos)} 個新機種自動成列：{"、".join(autos)}')
+
     log(f'機種週別台數：FY{fy} Q{q} W01~W{len(cols) - 1:02d}，{len(rows)} 個機種')
 
 def _verify_structure(wb, rows_stores, log):

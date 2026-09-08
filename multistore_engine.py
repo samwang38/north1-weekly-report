@@ -976,7 +976,7 @@ def class_week_columns(wk_end: date) -> list[tuple[str, date, date]]:
 
 
 def _class_masks(df: pd.DataFrame, mapping: dict):
-    """依對照表產生 (群組, 標籤, mask) 清單與各群組的 scope mask。"""
+    """依對照表產生 (群組索引, 標籤, mask) 清單與各群組的 scope mask。"""
     def scope_mask(sc):
         # 認證機一律不計入機種表（與每日追蹤主機報表口徑一致）
         m = ~df['品牌代碼'].isin(CERT_BRANDS)
@@ -994,7 +994,7 @@ def _class_masks(df: pd.DataFrame, mapping: dict):
         return m
 
     items, scopes = [], []
-    for g in mapping['groups']:
+    for gi, g in enumerate(mapping['groups']):
         sm = scope_mask(g.get('scope', {}))
         scopes.append(sm)
         for c in g['classes']:
@@ -1002,44 +1002,87 @@ def _class_masks(df: pd.DataFrame, mapping: dict):
                 m = df['類別6代碼'].isin([float(x) for x in c['cat6']])
             else:
                 m = df['存貨代碼'].isin(c['stk_id'])
-            items.append((g['name'], c['label'], sm & m))
+            items.append((gi, c['label'], sm & m))
     return items, scopes
+
+
+def _cat6_names(ids) -> dict:
+    """查 cat6 名稱（給自動成列的新機當顯示名）。查不到就回空、由呼叫端退回品名。"""
+    ids = [int(i) for i in ids if i == i]
+    if not ids:
+        return {}
+    try:
+        df = _run_epb_query(
+            f"select cat6_id, name from stkcat6 where cat6_id in ({','.join(map(str, ids))})")
+        return {float(r['CAT6_ID']): r['NAME'] for _, r in df.iterrows()}
+    except Exception:
+        return {}
 
 
 def units_by_class_week(df: pd.DataFrame, wk_end: date, mapping: dict):
     """各機種 × 財年週台數。台數 = SALE_TYPES(銷售+尾款) − 銷退，與 host_units 同口徑。
 
-    回傳 (cols, rows, unmapped)：
-      cols     = [(標題, 起, 迄), ...]，第一欄為上一季 W13 參考欄
-      rows     = [{'group':.., 'label':.., 'units':[各欄台數]}, ...] 依對照表順序
-      unmapped = [(cat6, 名稱, 台數), ...] 落在 scope 內但沒對到任何機種的品項
+    對照表沒列到的新機不會被漏掉：只要落在群組 scope 內，就自動成為該群組
+    最後一列（用 EPB 的 cat6 名稱當暫時 Class Name，標 auto=True 供上色），
+    並照常計入群組合計。要完全不計的品項放 mapping['ignore_cat6']。
+
+    回傳 (cols, rows)：
+      cols = [(標題, 起, 迄), ...]，第一欄為上一季 W13 參考欄
+      rows = [{'group':.., 'label':.., 'units':[...], 'auto':bool}, ...]
     """
     cols = class_week_columns(wk_end)
     d = df['單據日期'].dt.date
     sign = df['數量'].where(df['交易類型'].isin(SALE_TYPES),
                            -df['數量'].abs().where(df['交易類型'] == '銷退', 0))
     sign = sign.where(df['交易類型'].isin(SALE_TYPES | {'銷退'}), 0)
+    span = (d >= cols[0][1]) & (d <= cols[-1][2])
+
+    ignore = [float(x) for x in mapping.get('ignore_cat6', [])]
+    if ignore:
+        keep = ~df['類別6代碼'].isin(ignore)
+        sign = sign.where(keep, 0)
+
+    def weeks(mask):
+        return [int(sign[mask & (d >= s) & (d <= e)].sum()) for _, s, e in cols]
 
     items, scopes = _class_masks(df, mapping)
-    rows = []
-    for group, label, m in items:
-        units = [int(sign[m & (d >= s) & (d <= e)].sum()) for _, s, e in cols]
-        rows.append({'group': group, 'label': label, 'units': units})
-
     covered = pd.Series(False, index=df.index)
     for _, _, m in items:
         covered |= m
-    in_scope = pd.Series(False, index=df.index)
-    for sm in scopes:
-        in_scope |= sm
-    span = (d >= cols[0][1]) & (d <= cols[-1][2])
-    leak = in_scope & ~covered & span & (sign != 0)
-    unmapped = []
-    if leak.any():
-        g = df.loc[leak].groupby(['類別6代碼', '名稱'])
-        for (c6, name), idx in g.groups.items():
-            q = int(sign[idx].sum())
-            if q:
-                unmapped.append((c6, name, q))
-        unmapped.sort(key=lambda x: -abs(x[2]))
-    return cols, rows, unmapped
+    by_group = {}
+    for gi, label, m in items:
+        by_group.setdefault(gi, []).append((label, m))
+
+    # 各群組 scope 內、沒對到任何機種、且該期間有異動的品項 → 自動成列。
+    # 分群鍵跟著該群組定義機種的方式走：用 cat6 定義的就依 cat6，
+    # 用料號定義的（如 Pencil，全系列共用 cat6 6100）就依料號，
+    # 否則不同新機會被擠成同一列、標籤還會是無意義的大類名稱。
+    auto_by_group, all_new = {}, set()
+    for gi, g in enumerate(mapping['groups']):
+        leak = scopes[gi] & ~covered & span & (sign != 0)
+        if not leak.any():
+            continue
+        by_stk = any('stk_id' in c for c in g['classes'])
+        key = '存貨代碼' if by_stk else '類別6代碼'
+        vals = sorted(x for x in df.loc[leak, key].dropna().unique())
+        auto_by_group[gi] = (key, vals)
+        if not by_stk:
+            all_new.update(vals)
+    names = _cat6_names(all_new)
+
+    rows = []
+    for gi, g in enumerate(mapping['groups']):
+        for label, m in by_group.get(gi, []):
+            rows.append({'group': g['name'], 'label': label,
+                         'units': weeks(m), 'auto': False})
+        key, vals = auto_by_group.get(gi, (None, []))
+        for v in vals:
+            m = scopes[gi] & ~covered & (df[key] == v)
+            stk_name = df.loc[m, '名稱'].iloc[0] if m.any() else ''
+            if key == '存貨代碼':
+                label = f'{stk_name}（新，料號 {v}）'
+            else:
+                label = f'{names.get(v, stk_name) or f"cat6 {int(v)}"}（新，cat6 {int(v)}）'
+            rows.append({'group': g['name'], 'label': label,
+                         'units': weeks(m), 'auto': True})
+    return cols, rows
