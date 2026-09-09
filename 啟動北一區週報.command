@@ -70,8 +70,8 @@ if ! "$PY" -c "import $OPT" 2>/dev/null; then
   echo "       其餘功能正常。詳見 說明-月目標設定.md"
 fi
 if [ ! -f "$HOME/.config/studioa/forecast-service-account.json" ]; then
-  echo "[提醒] 找不到目標表金鑰，「月進度」的月目標與達成率會空白，"
-  echo "       其餘功能正常。詳見 說明-月目標設定.md"
+  echo "[提醒] 找不到目標表金鑰，「月進度」的月目標與達成率會空白，其餘功能正常。"
+  echo "       要補上的話：雙擊同資料夾的「安裝目標表金鑰.command」（有說明，不用打指令）"
 fi
 
 # ── 清掉佔用 8782 的舊伺服器（避免「跑到舊版」）──────────────
