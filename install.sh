@@ -37,8 +37,30 @@ else
 fi
 
 # ── 安裝 Python 套件 ──────────────────────────────────────────
-echo "安裝必要套件（openpyxl, pandas）…"
-pip3 install openpyxl pandas --quiet
+# ⚠️ 不要用裸 pip3：它可能屬於另一個 Python（實際踩過 —— pip3 是 3.9 的、
+#    python3 是 3.14 的）。一律用 "$PY" -m pip，跟執行的直譯器綁在一起。
+PY=""
+for c in python3 python3.13 python3.12 python3.11 python3.10 /usr/bin/python3; do
+  p=$(command -v "$c" 2>/dev/null) || continue
+  if "$p" -c "import openpyxl, pandas" 2>/dev/null; then PY="$p"; break; fi
+done
+[ -z "$PY" ] && PY=$(command -v python3)
+echo "使用 Python：$PY（$("$PY" -V 2>&1)）"
+
+echo "安裝必要套件…"
+OK=0
+for extra in "" "--user" "--break-system-packages"; do
+  if "$PY" -m pip install -r "$DEST/requirements.txt" --quiet $extra 2>/dev/null; then OK=1; break; fi
+done
+if [ "$OK" -ne 1 ] || ! "$PY" -c "import openpyxl, pandas" 2>/dev/null; then
+  echo ""
+  echo "[錯誤] 套件安裝失敗。請手動執行："
+  echo ""
+  echo "         \"$PY\" -m pip install --user -r \"$DEST/requirements.txt\""
+  echo ""
+  echo "       若出現 externally-managed-environment，把 --user 換成 --break-system-packages。"
+  exit 1
+fi
 
 # ── 確保 .command 可執行 ──────────────────────────────────────
 chmod +x "$DEST/啟動北一區週報.command"
