@@ -994,6 +994,28 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     # ── 機種週別台數 ──
     _fill_class_weeks(wb, df_cy, wk_end, log)
 
+    # ── 月進度（本月快照 + 1月至今逐月趨勢）──
+    log('產生月進度分頁…')
+    _months = []
+    for _m in range(1, MTD_START.month + 1):
+        _s = date(MTD_START.year, _m, 1)
+        _e = (MTD_END if _m == MTD_START.month
+              else date(MTD_START.year, _m, monthrange(MTD_START.year, _m)[1]))
+        _months.append((MTD_START.year, _m, _s, _e))
+    try:
+        import google_target
+        _targets = google_target.read_targets_range(
+            [f'{y}-{m:02d}' for y, m, _s, _e in _months], log)
+    except Exception as _e:
+        log(f'  ⚠️ 月目標讀取整段失敗，達成率將留白：{_e}')
+        _targets = {}
+    _fill_month_progress(wb, df_cy, _targets, _months, sa_prices, log)
+
+    # ── 分頁排序：配件七張移到最後（其餘維持原順序）──
+    # list.sort 是穩定排序，兩群各自的相對順序都不會變
+    wb._sheets.sort(key=lambda w: w.title.startswith('配件'))
+    log(f'分頁順序：{" / ".join(wb.sheetnames)}')
+
     # ── 結構自我檢查（抓「填錯格子 / 範本跑版」這類默默出錯）──
     _verify_structure(wb, rows_stores, log)
 
@@ -1002,6 +1024,252 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     wb.save(buf)
     return buf.getvalue()
 
+
+
+MONTH_SHEET = '月進度'
+
+
+def _fill_month_progress(wb, df_cy, targets, months, sa_prices, log):
+    """產生「月進度」分頁：本月快照 + 1月至今的逐月趨勢。
+
+    版面三段（由上而下）：
+      A. 本月快照   —— 六店＋北一區 × 五組指標，全部是公式
+      B. 逐月趨勢   —— 七張小表（達成率／3PP／SACare／EDU×4），門市 × 月份
+      C. 明細區     —— 唯一寫死數字的地方；A、B 兩段都只是引用它
+    改明細區的數字，上面兩段會自動重算（「輸出 Excel 一律保留公式」）。
+
+    months: [(year, month, start_date, end_date), ...] 1月~本月，本月為 MTD 區間
+    targets: {'YYYY-MM': {store_code: {'revenue','tpp','sac'}}}，缺月就沒有該鍵
+    """
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.formatting.rule import CellIsRule
+    from openpyxl.utils import get_column_letter as gcl
+
+    if MONTH_SHEET in wb.sheetnames:
+        del wb[MONTH_SHEET]
+    ws = wb.create_sheet(MONTH_SHEET)
+
+    HEAD = PatternFill('solid', fgColor='FF1B6FD4')
+    SUBT = PatternFill('solid', fgColor='FF2E86E0')
+    TOTF = PatternFill('solid', fgColor='FFDCE9F7')
+    GREY = PatternFill('solid', fgColor='FFF2F2F2')
+    WHITE = Font(bold=True, color='FFFFFFFF')
+    THIN = Side(style='thin', color='FFBFBFBF')
+    BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+    CENTER = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    FMT_INT, FMT_PCT = '#,##0', '0.0%'
+    RED = Font(color='FFFF0000')
+
+    stores = list(eng.STORES.items())          # [(code, name)] 六店
+    n_st = len(stores)
+    rows_all = stores + [('ALL', '北一區')]    # 七列
+    edu_stores = [(c, n) for c, n in stores if c not in eng.EDU_EXCLUDE]
+
+    # ── C. 明細區（先算位置，A/B 才有得引用）──────────────────────
+    # 每月一區塊，區塊內七列（六店 + 北一區）
+    DET_HDR = 3 + 9 + 1 + 7 * (len(months) + 2) + 2   # A 段 + B 段之後
+    # A 段固定 9 列、B 段每張表 (2 + 7) 列共 7 張 + 表間空列
+    A_START = 4
+    B_START = A_START + len(rows_all) + 3
+    B_TABLE_H = len(rows_all) + 3                     # 標題 + 表頭 + 七列 + 空列
+    N_TREND = 7
+    DET_START = B_START + N_TREND * B_TABLE_H + 2
+
+    def det_row(mi, si):
+        return DET_START + 2 + mi * len(rows_all) + si
+
+    DET_COLS = ['月份', '門市', '月目標(含稅)', '總業績(含Care)', '3PP金額(不含Care)',
+                'SA Care金額', '3PP目標金額', 'SA Care目標金額',
+                'Mac教育', 'Mac總', 'iPad教育', 'iPad總',
+                'Watch教育', 'Watch總', 'Pencil教育', 'Pencil總']
+    # 欄號：C=3 目標, D=4 業績, E=5 3PP, F=6 SACare, G=7 3PP目標, H=8 SACare目標
+    #       I/J=Mac, K/L=iPad, M/N=Watch, O/P=Pencil
+    C_TGT, C_REV, C_TPP, C_SAC, C_TTGT, C_STGT = 3, 4, 5, 6, 7, 8
+    EDU_COL = {'Mac': 9, 'iPad': 11, 'Watch': 13, 'Pencil': 15}
+
+    ws.cell(DET_START, 1).value = 'C. 明細區（唯一寫死的數字；上面兩段都是引用這裡的公式）'
+    ws.cell(DET_START, 1).font = Font(bold=True, size=12)
+    for i, lab in enumerate(DET_COLS):
+        c = ws.cell(DET_START + 1, i + 1)
+        c.value = lab; c.fill = SUBT; c.font = WHITE
+        c.alignment = CENTER; c.border = BORDER
+
+    log(f'  計算 {len(months)} 個月 × {len(rows_all)} 列的月度指標…')
+    for mi, (yy, mm, m_s, m_e) in enumerate(months):
+        ym = f'{yy}-{mm:02d}'
+        tgt = targets.get(ym, {})
+        for si, (code, name) in enumerate(rows_all):
+            r = det_row(mi, si)
+            sc = None if code == 'ALL' else code
+            ws.cell(r, 1).value = f'{mm}月'
+            ws.cell(r, 2).value = name
+            m = eng.calc_store_metrics(df_cy, m_s, m_e, sc, sa_prices)
+            ws.cell(r, C_REV).value = m['total_rev']
+            ws.cell(r, C_TPP).value = m['tpp_excl_sa']
+            ws.cell(r, C_SAC).value = m['sa_rev']
+            if code == 'ALL':
+                # 目標：六店加總用公式
+                for col in (C_TGT, C_TTGT, C_STGT):
+                    a, b = det_row(mi, 0), det_row(mi, n_st - 1)
+                    ws.cell(r, col).value = f'=SUM({gcl(col)}{a}:{gcl(col)}{b})'
+                # EDU：⚠️ 只加總「不排除」的門市（羅東不計）
+                for cat, col in EDU_COL.items():
+                    refs = '+'.join(
+                        f'{gcl(col)}{det_row(mi, stores.index((c, n)))}'
+                        for c, n in edu_stores)
+                    ws.cell(r, col).value = f'={refs}'
+                    refs2 = '+'.join(
+                        f'{gcl(col + 1)}{det_row(mi, stores.index((c, n)))}'
+                        for c, n in edu_stores)
+                    ws.cell(r, col + 1).value = f'={refs2}'
+            else:
+                t = tgt.get(code)
+                if t:
+                    ws.cell(r, C_TGT).value  = int(round(t['revenue']))
+                    ws.cell(r, C_TTGT).value = int(round(t['tpp']))
+                    ws.cell(r, C_STGT).value = int(round(t['sac']))
+                edu = eng.edu_units_all(df_cy, m_s, m_e, code)
+                for cat, col in EDU_COL.items():
+                    ws.cell(r, col).value     = edu[cat][0]
+                    ws.cell(r, col + 1).value = edu[cat][1]
+            for c in range(1, len(DET_COLS) + 1):
+                ws.cell(r, c).border = BORDER
+                ws.cell(r, c).number_format = FMT_INT if c >= 3 else 'General'
+                if code == 'ALL':
+                    ws.cell(r, c).fill = TOTF
+                    ws.cell(r, c).font = Font(bold=True)
+
+    cur_mi = len(months) - 1
+    cur = months[cur_mi]
+    days_passed = (cur[3] - cur[2]).days + 1
+    days_total = monthrange(cur[0], cur[1])[1]
+    pace = days_passed / days_total
+
+    # ── A. 本月快照 ──────────────────────────────────────────────
+    ws.cell(1, 1).value = (f'月進度  ·  {cur[0]}/{cur[1]:02d}  '
+                           f'({cur[2]:%m/%d}~{cur[3]:%m/%d})  ·  '
+                           f'月經過 {days_passed}/{days_total} 天 = {pace:.0%}')
+    ws.cell(1, 1).font = Font(bold=True, size=14)
+    if not targets.get(f'{cur[0]}-{cur[1]:02d}'):
+        ws.cell(2, 1).value = '⚠️ 本月目標未取得（線上目標表讀取失敗），達成率欄留白'
+        ws.cell(2, 1).font = Font(bold=True, color='FFC00000')
+
+    A_HDR = ['門市', '月目標', '本月業績', '達成率', f'月經過({pace:.0%})', '缺口金額',
+             '3PP搭售率', '3PP目標率', 'SACare搭售率', 'SACare目標率',
+             'EDU-Mac', 'EDU-iPad', 'EDU-Watch', 'EDU-Pencil']
+    ws.cell(A_START - 1, 1).value = 'A. 本月快照'
+    ws.cell(A_START - 1, 1).font = Font(bold=True, size=12)
+    for i, lab in enumerate(A_HDR):
+        c = ws.cell(A_START, i + 1)
+        c.value = lab; c.fill = HEAD; c.font = WHITE
+        c.alignment = CENTER; c.border = BORDER
+
+    for si, (code, name) in enumerate(rows_all):
+        r = A_START + 1 + si
+        d = det_row(cur_mi, si)
+        ws.cell(r, 1).value = name
+        ws.cell(r, 2).value = f'={gcl(C_TGT)}{d}'
+        ws.cell(r, 3).value = f'={gcl(C_REV)}{d}'
+        ws.cell(r, 4).value = f'=IF(B{r}=0,"",C{r}/B{r})'
+        ws.cell(r, 5).value = pace
+        ws.cell(r, 6).value = f'=IF(B{r}=0,"",C{r}-B{r})'
+        ws.cell(r, 7).value = f'=IF(C{r}=0,"",{gcl(C_TPP)}{d}/C{r})'
+        ws.cell(r, 8).value = f'=IF(B{r}=0,"",{gcl(C_TTGT)}{d}/B{r})'
+        ws.cell(r, 9).value = f'=IF(C{r}=0,"",{gcl(C_SAC)}{d}/C{r})'
+        ws.cell(r, 10).value = f'=IF(B{r}=0,"",{gcl(C_STGT)}{d}/B{r})'
+        for j, (cat, col) in enumerate(EDU_COL.items()):
+            cell = ws.cell(r, 11 + j)
+            if code in eng.EDU_EXCLUDE:
+                cell.value = '—'          # 教育價佔比不計此店（同每日追蹤主機口徑）
+                cell.alignment = Alignment(horizontal='center')
+            else:
+                cell.value = (f'=IF({gcl(col + 1)}{d}=0,"",'
+                              f'{gcl(col)}{d}/{gcl(col + 1)}{d})')
+            cell.number_format = FMT_PCT
+        for c in (2, 3, 6):
+            ws.cell(r, c).number_format = FMT_INT
+        for c in (4, 5, 7, 8, 9, 10):
+            ws.cell(r, c).number_format = FMT_PCT
+        for c in range(1, len(A_HDR) + 1):
+            ws.cell(r, c).border = BORDER
+            if code == 'ALL':
+                ws.cell(r, c).fill = TOTF
+                ws.cell(r, c).font = Font(bold=True)
+
+    a_lo, a_hi = A_START + 1, A_START + len(rows_all)
+    # 達成率未達 100% → 紅字（不上底色）
+    ws.conditional_formatting.add(
+        f'D{a_lo}:D{a_hi}',
+        CellIsRule(operator='lessThan', formula=['1'], font=RED))
+
+    # ── B. 逐月趨勢 ──────────────────────────────────────────────
+    # (標題, 公式產生器) —— 每張表都是 門市 × 月份
+    def f_rate(num_col, den_col):
+        return lambda d: f'=IF({gcl(den_col)}{d}=0,"",{gcl(num_col)}{d}/{gcl(den_col)}{d})'
+
+    trends = [
+        ('B1. 業績達成率（本月業績 ÷ 月目標）', f_rate(C_REV, C_TGT), False),
+        ('B2. 3PP 搭售率（不含 SA Care，金額口徑）', f_rate(C_TPP, C_REV), False),
+        ('B3. SA Care 搭售率（金額口徑）', f_rate(C_SAC, C_REV), False),
+        ('B4. EDU 佔比 — Mac', f_rate(EDU_COL['Mac'], EDU_COL['Mac'] + 1), True),
+        ('B5. EDU 佔比 — iPad', f_rate(EDU_COL['iPad'], EDU_COL['iPad'] + 1), True),
+        ('B6. EDU 佔比 — Watch', f_rate(EDU_COL['Watch'], EDU_COL['Watch'] + 1), True),
+        ('B7. EDU 佔比 — Pencil', f_rate(EDU_COL['Pencil'], EDU_COL['Pencil'] + 1), True),
+    ]
+
+    for ti, (title, fml, is_edu) in enumerate(trends):
+        top = B_START + ti * B_TABLE_H
+        ws.cell(top, 1).value = title
+        ws.cell(top, 1).font = Font(bold=True, size=12)
+        h = ws.cell(top + 1, 1)
+        h.value = '門市'; h.fill = SUBT; h.font = WHITE
+        h.alignment = CENTER; h.border = BORDER
+        for mi, (yy, mm, _s, _e) in enumerate(months):
+            c = ws.cell(top + 1, 2 + mi)
+            c.value = f'{mm}月' + ('*' if mi == cur_mi else '')
+            c.fill = SUBT; c.font = WHITE
+            c.alignment = CENTER; c.border = BORDER
+        for si, (code, name) in enumerate(rows_all):
+            r = top + 2 + si
+            ws.cell(r, 1).value = name
+            ws.cell(r, 1).border = BORDER
+            for mi in range(len(months)):
+                cell = ws.cell(r, 2 + mi)
+                if is_edu and code in eng.EDU_EXCLUDE:
+                    cell.value = '—'
+                    cell.alignment = Alignment(horizontal='center')
+                else:
+                    cell.value = fml(det_row(mi, si))
+                cell.number_format = FMT_PCT
+                cell.border = BORDER
+                if code == 'ALL':
+                    cell.fill = TOTF
+                    cell.font = Font(bold=True)
+            if code == 'ALL':
+                ws.cell(r, 1).fill = TOTF
+                ws.cell(r, 1).font = Font(bold=True)
+        # 只有達成率做標示：未達 100% 紅字。其餘表格不上色，避免整片色塊。
+        if ti == 0:
+            rng = f'B{top + 2}:{gcl(1 + len(months))}{top + 1 + len(rows_all)}'
+            ws.conditional_formatting.add(
+                rng, CellIsRule(operator='lessThan', formula=['1'], font=RED))
+
+    ws.cell(B_START + N_TREND * B_TABLE_H, 1).value = (
+        '* = 本月（未過完，僅到報表日）。EDU 佔比排除羅東門市，'
+        '口徑同「每日追蹤主機」報表（已對帳 30/30 吻合）。')
+    ws.cell(B_START + N_TREND * B_TABLE_H, 1).font = Font(size=9, color='FF808080')
+
+    ws.column_dimensions['A'].width = 16
+    for i in range(2, max(len(months) + 2, len(DET_COLS) + 1)):
+        ws.column_dimensions[gcl(i)].width = 13
+    ws.freeze_panes = 'B5'
+
+    # 移到「重點項目進度」之後
+    names = wb.sheetnames
+    if '重點項目進度' in names:
+        want = names.index('重點項目進度') + 1
+        wb.move_sheet(MONTH_SHEET, offset=want - names.index(MONTH_SHEET))
+    log(f'月進度分頁完成（{len(months)} 個月 × {len(rows_all)} 列）')
 
 
 CLASS_SHEET = '機種週別台數'
@@ -1156,6 +1424,16 @@ def _verify_structure(wb, rows_stores, log):
     ws_wk = wb['BY店 本週比較']
     if not any('~' in str(ws_wk.cell(3, c).value or '') for c in range(1, 33)):
         issues.append('「BY店 本週比較」第 3 列找不到日期區間，標題可能沒更新')
+
+    # 6. 「月進度」分頁存在，且 A 段店名落在正確列
+    if MONTH_SHEET not in wb.sheetnames:
+        issues.append(f'缺少分頁「{MONTH_SHEET}」')
+    else:
+        ws_mp = wb[MONTH_SHEET]
+        want = [eng.STORES[c] for c in rows_stores if c != 'ALL'] + ['北一區']
+        got = [str(ws_mp.cell(5 + i, 1).value or '').strip() for i in range(len(want))]
+        if got != want:
+            issues.append(f'「{MONTH_SHEET}」A 段店名對不上：預期{want}，實得{got}')
 
     if issues:
         msg = '結構檢查未通過：\n  - ' + '\n  - '.join(issues)

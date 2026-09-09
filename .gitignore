@@ -6,3 +6,4 @@ downloads/
 *.xlsx.tmp
 data/traffic_cache.json
 local_config.json
+data/target_cache.json

@@ -346,7 +346,7 @@ def load_from_epb(
         f" l.emp_id1, coalesce(e.name, l.emp_id1) as emp_name,"
         f" l.stk_id, l.name as stk_name, l.stk_qty,"
         f" l.line_total_net, l.line_tax, l.trn_cost_price, l.cost_price,"
-        f" l.brand_id, l.cat1_id, l.cat3_id, l.cat4_id, l.cat5_id, l.cat6_id, l.disc_num"
+        f" l.brand_id, l.cat1_id, l.cat2_id, l.cat3_id, l.cat4_id, l.cat5_id, l.cat6_id, l.disc_num"
         f" from poslinev_bi l"
         f" left join (select emp_id, name from (select emp_id, name,"
         f" row_number() over (partition by emp_id order by lengthb(name) desc) rn"
@@ -360,7 +360,7 @@ def load_from_epb(
     print(f'  EPB 查詢 {start_date}~{end_date} ({len(store_codes)} 店)...', flush=True)
     raw = _run_epb_query(sql)
     if raw.empty:
-        return pd.DataFrame(columns=REQUIRED_COLUMNS + ['NET'])
+        return pd.DataFrame(columns=REQUIRED_COLUMNS + ['類別2代碼', 'NET'])
 
     def num(col):
         return pd.to_numeric(raw[col].replace('', '0'), errors='coerce').fillna(0)
@@ -386,6 +386,9 @@ def load_from_epb(
         '單位成本':        trn_cost.where(trn_cost != 0, cost),
         '折扣':           num('DISC_NUM'),
         '類別1代碼':       pd.to_numeric(raw['CAT1_ID'], errors='coerce'),
+        # 認證機判定用（cat2=2029）。教育價佔比口徑要排除認證機，
+        # 以字串保留（前導零有意義），不要轉數字。
+        '類別2代碼':       raw['CAT2_ID'].astype(str).str.strip(),
         '類別3代碼':       pd.to_numeric(raw['CAT3_ID'], errors='coerce'),
         '類別4代碼':       pd.to_numeric(raw['CAT4_ID'], errors='coerce'),
         '類別5代碼':       pd.to_numeric(raw['CAT5_ID'], errors='coerce'),
@@ -598,6 +601,79 @@ def calc_store_metrics(df: pd.DataFrame, start: date, end: date,
         'arpedia_units': arpedia_units(d),     # ARpedia 台數（品牌 496）
         'coupon_rev':    voucher_revenue(d),   # 禮券金額（高島屋禮券：類別6 6884/6888/6889）
     }
+
+
+# ─── 教育價佔比（EDU）────────────────────────────────────────────────
+# 口徑完全比照 ~/工具中心/scripts/warranty_report_all.py 的 query_edu_units()：
+#   分子 = 該機種出現在「含教育價 SKU」單據內的淨台數
+#   分母 = 該機種全部淨台數
+#   共同條件：交易別 A/E/H、排除認證機 cat2=2029
+EDU_SKU   = {'99200202', '99200203'}   # 教育價活動 / 教育價單機
+CERT_CAT2 = '2029'                      # 認證機
+
+EDU_CATS = ['Mac', 'iPad', 'Watch', 'Pencil']
+
+# Mac/iPad/Watch 用類別4（同 warranty_report_all.py 的 CAT4_EDU）
+C4_EDU = {
+    'Mac':   {4001.0, 4002.0},
+    'iPad':  {4005.0, 4006.0, 4041.0},
+    'Watch': {4038.0},
+}
+# Pencil 沒有專屬 cat4（掛在 4010 配件底下），改用「原廠 Apple Pencil」三件組：
+#   品牌 073（Apple 原廠）+ 類別5 5039 + 類別6 6100
+# 2026-09-09 對 EPB stkmas 驗證：命中 8 個 SKU，全是 Apple Pencil 本體
+#   （07301896 / 07304626 / 07304973 / 07309062 / 07310018 / 07310512 / 07311729 / 07311730）
+#   cat6=6093 的是筆尖(Tips)與 DEMO 機，本來就不該計入。
+# ⚠️ 用動態條件而非寫死 SKU 清單，新款 Pencil 上市才不會默默漏掉。
+EDU_PENCIL_BRAND = 73.0
+EDU_PENCIL_CAT5  = 5039.0
+EDU_PENCIL_CAT6  = 6100.0
+
+# 教育價佔比不計的門市（北一區排除羅東，同 warranty_report_all.py 的 edu_excl）
+EDU_EXCLUDE = {'057'}
+
+
+def _edu_cat_mask(d: pd.DataFrame, cat: str) -> pd.Series:
+    """某 EDU 品類的行遮罩（已排除認證機）"""
+    base = d['類別2代碼'] != CERT_CAT2
+    if cat == 'Pencil':
+        return (base
+                & (d['品牌代碼'] == EDU_PENCIL_BRAND)
+                & (d['類別5代碼'] == EDU_PENCIL_CAT5)
+                & (d['類別6代碼'] == EDU_PENCIL_CAT6))
+    return base & d['類別4代碼'].isin(C4_EDU[cat])
+
+
+def _net_units(d: pd.DataFrame, m: pd.Series) -> int:
+    """淨台數 = 銷售 + 尾款 − 銷退（與 host_units 同算法）"""
+    sale = d.loc[m & d['交易類型'].isin(SALE_TYPES), '數量'].sum()
+    ret  = d.loc[m & (d['交易類型'] == '銷退'), '數量'].abs().sum()
+    return int(sale - ret)
+
+
+def edu_units_all(df: pd.DataFrame, start: date, end: date,
+                  store_code: str | None) -> dict[str, tuple[int, int]]:
+    """一次算四個品類，回傳 {品類: (教育台數, 總台數)}。
+
+    store_code=None 代表全區合計（此時羅東已由呼叫端排除在 df 之外或另行處理）。
+    """
+    d = filter_period(df, start, end, store_code)
+    if d.empty:
+        return {c: (0, 0) for c in EDU_CATS}
+
+    # 教育單據集合：(地點, 單據)。此步刻意不篩交易別／認證機，與現成工具一致。
+    edu_docs = set(
+        d.loc[d['存貨代碼'].isin(EDU_SKU), ['地點代碼', '單據代碼']]
+         .drop_duplicates().itertuples(index=False, name=None))
+
+    in_edu = (pd.Series(list(zip(d['地點代碼'], d['單據代碼'])), index=d.index)
+              .isin(edu_docs)) if edu_docs else pd.Series(False, index=d.index)
+
+    out = {}
+    for cat in EDU_CATS:
+        m = _edu_cat_mask(d, cat)
+        out[cat] = (_net_units(d, m & in_edu), _net_units(d, m))
+    return out
 
 
 def calc_accessory_by_c4(df: pd.DataFrame, start: date, end: date,
