@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT         = Path(__file__).resolve().parent
 STATIC_ROOT  = ROOT / 'static'
 TEMPLATE     = ROOT / 'template' / '北一區週報_優化.xlsx'
+REGION_NAME  = '北一區'   # 合計列與結構檢查用；北二版改成 '北二區'
 SA_FILE      = ROOT / 'data' / 'SAcare對應價目表.xlsx'
 TRAFFIC_FILE = ROOT / 'data' / 'traffic_cache.json'
 CLASS_MAP_FILE = ROOT / 'data' / '機種對照.json'
@@ -1004,12 +1005,12 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         _months.append((MTD_START.year, _m, _s, _e))
     try:
         import google_target
-        _targets = google_target.read_targets_range(
-            [f'{y}-{m:02d}' for y, m, _s, _e in _months], log)
+        _targets, _dup_months = google_target.read_targets_range(
+            [(y, m) for y, m, _s, _e in _months], STORE_CODES, log)
     except Exception as _e:
         log(f'  ⚠️ 月目標讀取整段失敗，達成率將留白：{_e}')
-        _targets = {}
-    _fill_month_progress(wb, df_cy, _targets, _months, sa_prices, log)
+        _targets, _dup_months = {}, set()
+    _fill_month_progress(wb, df_cy, _targets, _months, sa_prices, _dup_months, log)
 
     # ── 分頁排序：配件七張移到最後（其餘維持原順序）──
     # list.sort 是穩定排序，兩群各自的相對順序都不會變
@@ -1029,7 +1030,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
 MONTH_SHEET = '月進度'
 
 
-def _fill_month_progress(wb, df_cy, targets, months, sa_prices, log):
+def _fill_month_progress(wb, df_cy, targets, months, sa_prices, dup_months, log):
     """產生「月進度」分頁：本月快照 + 1月至今的逐月趨勢。
 
     版面三段（由上而下）：
@@ -1040,6 +1041,7 @@ def _fill_month_progress(wb, df_cy, targets, months, sa_prices, log):
 
     months: [(year, month, start_date, end_date), ...] 1月~本月，本月為 MTD 區間
     targets: {'YYYY-MM': {store_code: {'revenue','tpp','sac'}}}，缺月就沒有該鍵
+    dup_months: 目標與前月一字不差的可疑月份，會在趨勢表的月份欄加 ⚠️ 標記
     """
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.formatting.rule import CellIsRule
@@ -1062,7 +1064,7 @@ def _fill_month_progress(wb, df_cy, targets, months, sa_prices, log):
 
     stores = list(eng.STORES.items())          # [(code, name)] 六店
     n_st = len(stores)
-    rows_all = stores + [('ALL', '北一區')]    # 七列
+    rows_all = stores + [('ALL', REGION_NAME)]
     edu_stores = [(c, n) for c, n in stores if c not in eng.EDU_EXCLUDE]
 
     # ── C. 明細區（先算位置，A/B 才有得引用）──────────────────────
@@ -1226,7 +1228,9 @@ def _fill_month_progress(wb, df_cy, targets, months, sa_prices, log):
         h.alignment = CENTER; h.border = BORDER
         for mi, (yy, mm, _s, _e) in enumerate(months):
             c = ws.cell(top + 1, 2 + mi)
-            c.value = f'{mm}月' + ('*' if mi == cur_mi else '')
+            ym = f'{yy}-{mm:02d}'
+            c.value = (f'{mm}月' + ('*' if mi == cur_mi else '')
+                       + ('⚠️' if ym in dup_months else ''))
             c.fill = SUBT; c.font = WHITE
             c.alignment = CENTER; c.border = BORDER
         for si, (code, name) in enumerate(rows_all):
@@ -1255,8 +1259,9 @@ def _fill_month_progress(wb, df_cy, targets, months, sa_prices, log):
                 rng, CellIsRule(operator='lessThan', formula=['1'], font=RED))
 
     ws.cell(B_START + N_TREND * B_TABLE_H, 1).value = (
-        '* = 本月（未過完，僅到報表日）。EDU 佔比排除羅東門市，'
-        '口徑同「每日追蹤主機」報表（已對帳 30/30 吻合）。')
+        '* = 本月（未過完，僅到報表日）。'
+        '⚠️ = 該月目標與前一個月完全相同，線上目標表該月分頁可能忘了更新，達成率僅供參考。'
+        ' EDU 佔比排除部分門市，口徑同「每日追蹤主機」報表。')
     ws.cell(B_START + N_TREND * B_TABLE_H, 1).font = Font(size=9, color='FF808080')
 
     ws.column_dimensions['A'].width = 16
@@ -1430,7 +1435,7 @@ def _verify_structure(wb, rows_stores, log):
         issues.append(f'缺少分頁「{MONTH_SHEET}」')
     else:
         ws_mp = wb[MONTH_SHEET]
-        want = [eng.STORES[c] for c in rows_stores if c != 'ALL'] + ['北一區']
+        want = [eng.STORES[c] for c in rows_stores if c != 'ALL'] + [REGION_NAME]
         got = [str(ws_mp.cell(5 + i, 1).value or '').strip() for i in range(len(want))]
         if got != want:
             issues.append(f'「{MONTH_SHEET}」A 段店名對不上：預期{want}，實得{got}')
