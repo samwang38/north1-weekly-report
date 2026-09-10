@@ -199,7 +199,7 @@ def _urlopen_retry(req, ctx, log, tries=2):
 
 def _query_daily(site_id, start: date, end: date, auth, tenant, log):
     """打 REST API 取每日 traffic，回傳 {date: traffic}。"""
-    import urllib.request, json as _json, ssl
+    import urllib.request, urllib.error, json as _json, ssl
     # 公司 VPN(Fortinet) 會做 SSL 檢查插入自簽憑證 → 關閉憑證驗證才連得到
     _ctx = ssl.create_default_context()
     _ctx.check_hostname = False
@@ -216,10 +216,15 @@ def _query_daily(site_id, start: date, end: date, auth, tenant, log):
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": f"Bearer {auth}", "tenant": tenant,
         "Content-Type": "application/json", "Accept": "application/json"})
-    with _urlopen_retry(req, _ctx, log) as r:
-        if r.status in (401, 419):
-            raise PermissionError("token expired")
-        data = _json.loads(r.read().decode("utf-8"))
+    try:
+        with _urlopen_retry(req, _ctx, log) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        # urllib 遇到 401 是直接丟 HTTPError，不會回傳 response，
+        # 必須轉成 PermissionError 才會觸發呼叫端的重新登入重試
+        if e.code in (401, 419):
+            raise PermissionError("token expired") from e
+        raise
     rows = (((data.get("result") or [{}])[0]).get("currentPeriod") or {}).get("data") or []
     return {d.get("day"): int(d.get("traffic") or 0) for d in rows if d.get("day")}
 
