@@ -865,6 +865,19 @@ def watch_band_units(df: pd.DataFrame) -> tuple[int, int]:
     return _units_revenue(df, m)
 
 
+# 服務費（資料轉移/重置系統）：本週其他細項 R/S 欄
+SVC_FEE_IOS = '99900948'   # iOS資料轉移/重置系統
+SVC_FEE_MAC = '99900947'   # Mac資料轉移/重置系統
+
+
+def service_fee_units(df: pd.DataFrame, stk_id: str) -> int:
+    """服務費件數 = 銷售 + 尾款 − 銷退（不分定價）"""
+    m = df['存貨代碼'] == stk_id
+    sale = df.loc[m & df['交易類型'].isin(SALE_TYPES), '數量'].sum()
+    ret  = df.loc[m & (df['交易類型'] == '銷退'), '數量'].abs().sum()
+    return int(sale - ret)
+
+
 def calc_misc_metrics(df: pd.DataFrame, start: date, end: date,
                       store_code: str | None, sa_prices: dict) -> dict:
     """BY店 本週其他細項 所需的所有 KPI，回傳 dict"""
@@ -923,6 +936,7 @@ def calc_misc_metrics(df: pd.DataFrame, start: date, end: date,
         'sa_total': sa_mac + sa_iphone + sa_ipad + sa_watch + sa_airpods,
         'coupon_give': coupon_give, 'coupon_redeem': coupon_redeem,
         'eco': eco, 'cable': cable, 'host_total': host_total,
+        'svc_ios': service_fee_units(d, SVC_FEE_IOS), 'svc_mac': service_fee_units(d, SVC_FEE_MAC),
         'spk_with': spk_with, 'spk_without': spk_without,
         'iphone_host': iphone_host,
         'iphone_prot_qty': iphone_prot_qty, 'iphone_prot_rev': iphone_prot_rev,
