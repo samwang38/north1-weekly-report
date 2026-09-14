@@ -678,8 +678,9 @@ def edu_units_all(df: pd.DataFrame, start: date, end: date,
 
 # ─── AAR 轉單 APR 結教育價 ────────────────────────────────────────────
 # AAR 門市不能結教育價，教育價客人由 AAR 店員帶到 APR 門市結帳。
-# 判定：結帳門市＝對應 APR ＋ 主機那行的經手人主掛門市＝AAR ＋ 同單含教育 SKU。
-AAR_TO_APR = {'057': '046'}   # 羅東→阿波羅
+# 判定：主機那行的經手人主掛門市＝AAR ＋ 結帳門市≠該 AAR 本店 ＋ 同單含教育 SKU。
+# 不限定主要 APR：實測永和也會去板橋遠百、板橋誠品也會去西門結。
+AAR_TO_APR = {'057': '046'}   # AAR 門市 → 主要結帳 APR（無資料時顯示用）
 AAR_HOME_DAYS = 90   # 判主掛門市的回看天數（server 載入範圍要涵蓋）
 
 
@@ -715,18 +716,23 @@ def emp_home_store(df: pd.DataFrame, end: date, days: int = AAR_HOME_DAYS) -> di
 
 def aar_edu_units(df: pd.DataFrame, start: date, end: date,
                   home: dict[str, str]) -> dict[str, dict]:
-    """回傳 {AAR店: {'iPad': n, 'Mac': n, 'emps': {員工: 台數}}}"""
-    out = {}
-    for aar, apr in AAR_TO_APR.items():
-        d = filter_period(df, start, end, apr)
-        m_aar = d['員工代碼'].map(home).eq(aar) & _edu_doc_mask(d)
-        r = {c: _net_units(d, m_aar & _edu_cat_mask(d, c)) for c in ('iPad', 'Mac')}
-        hm = m_aar & (_edu_cat_mask(d, 'iPad') | _edu_cat_mask(d, 'Mac'))
-        r['emps'] = {e: _net_units(g, pd.Series(True, index=g.index))
-                     for e, g in d[hm].groupby('員工代碼')}
-        out[aar] = r
+    """回傳 {AAR店: {'iPad': n, 'Mac': n, 'stores': {結帳店: 台數}, 'emps': {員工: 台數}}}"""
+    out = {aar: {'iPad': 0, 'Mac': 0, 'stores': {}, 'emps': {}} for aar in AAR_TO_APR}
+    d = filter_period(df, start, end)
+    if d.empty:
+        return out
+    h = d['員工代碼'].map(home)
+    base = h.isin(list(AAR_TO_APR)) & (d['地點代碼'] != h) & _edu_doc_mask(d)
+    host = _edu_cat_mask(d, 'iPad') | _edu_cat_mask(d, 'Mac')
+    for aar, r in out.items():
+        m = base & h.eq(aar)
+        for c in ('iPad', 'Mac'):
+            r[c] = _net_units(d, m & _edu_cat_mask(d, c))
+        g = d[m & host]
+        allrows = pd.Series(True, index=g.index)
+        r['stores'] = {k: _net_units(x, allrows[x.index]) for k, x in g.groupby('地點代碼')}
+        r['emps'] = {k: _net_units(x, allrows[x.index]) for k, x in g.groupby('員工代碼')}
     return out
-
 
 def calc_accessory_by_c4(df: pd.DataFrame, start: date, end: date,
                           store_code: str | None, sa_codes: set[str]) -> dict[float, int]:

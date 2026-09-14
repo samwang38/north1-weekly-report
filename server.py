@@ -633,13 +633,18 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     for i, (aar, apr) in enumerate(aar_rows):
         rr = SPK_ROW + i
         _aar_cell(rr, AAR_COL,     eng.STORES[aar], (SPK_ROW, 1))
-        _aar_cell(rr, AAR_COL + 1, eng.STORES[apr], (SPK_ROW, 1))
+        _cnt = {}
+        for _res in (aar_wk[aar], aar_mtd[aar]):
+            for _s, _n in _res['stores'].items():
+                _cnt[_s] = _cnt.get(_s, 0) + _n
+        _names = [eng.STORES[_s] for _s in sorted(_cnt, key=lambda k: -_cnt[k]) if _cnt[_s]]
+        _aar_cell(rr, AAR_COL + 1, '、'.join(_names) or eng.STORES[apr], (SPK_ROW, 1))
         for j, v in enumerate([aar_wk[aar]['iPad'], aar_mtd[aar]['iPad'],
                                aar_wk[aar]['Mac'],  aar_mtd[aar]['Mac']]):
             _aar_cell(rr, AAR_COL + 2 + j, v, (SPK_ROW, 2))
-        log(f'  AAR {eng.STORES[aar]}→{eng.STORES[apr]}：本週 iPad {aar_wk[aar]["iPad"]} Mac {aar_wk[aar]["Mac"]}'
+        log(f'  AAR {eng.STORES[aar]}→{"、".join(_names) or eng.STORES[apr]}：本週 iPad {aar_wk[aar]["iPad"]} Mac {aar_wk[aar]["Mac"]}'
             f'｜月累積 iPad {aar_mtd[aar]["iPad"]} Mac {aar_mtd[aar]["Mac"]}'
-            f'｜月累積經手人 {aar_mtd[aar]["emps"] or "無"}')
+            f'｜月累積經手人 {aar_mtd[aar]["emps"] or "無"} 結帳店 {aar_mtd[aar]["stores"] or "無"}')
     tr = SPK_ROW + len(aar_rows)
     tot_style = (SPK_ROW + len(STORE_CODES), 2)
     _aar_cell(tr, AAR_COL, 'Total', (SPK_ROW + len(STORE_CODES), 1))
