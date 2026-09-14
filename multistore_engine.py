@@ -878,6 +878,11 @@ def service_fee_units(df: pd.DataFrame, stk_id: str) -> int:
     return int(sale - ret)
 
 
+def service_fee_revenue(df: pd.DataFrame, stk_id: str) -> int:
+    """服務費金額（含稅）：signed NET 加總，銷退自動扣回（同喇叭金額口徑）"""
+    return int(df.loc[df['存貨代碼'] == stk_id, 'NET'].sum())
+
+
 def calc_misc_metrics(df: pd.DataFrame, start: date, end: date,
                       store_code: str | None, sa_prices: dict) -> dict:
     """BY店 本週其他細項 所需的所有 KPI，回傳 dict"""
@@ -937,6 +942,7 @@ def calc_misc_metrics(df: pd.DataFrame, start: date, end: date,
         'coupon_give': coupon_give, 'coupon_redeem': coupon_redeem,
         'eco': eco, 'cable': cable, 'host_total': host_total,
         'svc_ios': service_fee_units(d, SVC_FEE_IOS), 'svc_mac': service_fee_units(d, SVC_FEE_MAC),
+        'svc_ios_rev': service_fee_revenue(d, SVC_FEE_IOS), 'svc_mac_rev': service_fee_revenue(d, SVC_FEE_MAC),
         'spk_with': spk_with, 'spk_without': spk_without,
         'iphone_host': iphone_host,
         'iphone_prot_qty': iphone_prot_qty, 'iphone_prot_rev': iphone_prot_rev,

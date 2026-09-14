@@ -600,19 +600,27 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         ws_misc.cell(r, 12).value = rate(m['coupon_redeem'], m['coupon_give'])
         ws_misc.cell(r, 13).value = m['eco'];         ws_misc.cell(r, 14).value = m['cable']
         ws_misc.cell(r, 17).value = m['host_total']
-        # R/S 欄：服務費 iOS / Mac（原 Mysetup 手填欄）
+        # R~U 欄：服務費 iOS / Mac 件數＋金額（R/S 原為 Mysetup 手填欄）
         from copy import copy as _copy
-        for _c in (18, 19):
+        for _c in (18, 19, 20, 21):
             ws_misc.cell(r, _c)._style = _copy(ws_misc.cell(r, 17)._style)
         if code == 'ALL':
             ws_misc.cell(r, 18).value = f'=SUM(R3:R{r - 1})'
             ws_misc.cell(r, 19).value = f'=SUM(S3:S{r - 1})'
+            ws_misc.cell(r, 20).value = f'=SUM(T3:T{r - 1})'
+            ws_misc.cell(r, 21).value = f'=SUM(U3:U{r - 1})'
             ws_misc.cell(2, 16).value = '服務費'
             ws_misc.cell(2, 18).value = '服務費 iOS'
             ws_misc.cell(2, 19).value = '服務費 Mac'
+            ws_misc.cell(2, 20).value = '服務費金額 iOS'
+            ws_misc.cell(2, 21).value = '服務費金額 Mac'
+            for _c in (20, 21):
+                ws_misc.cell(2, _c)._style = _copy(ws_misc.cell(2, 19)._style)
         else:
             ws_misc.cell(r, 18).value = m['svc_ios']
             ws_misc.cell(r, 19).value = m['svc_mac']
+            ws_misc.cell(r, 20).value = m['svc_ios_rev']
+            ws_misc.cell(r, 21).value = m['svc_mac_rev']
     for ri, code in enumerate(rows_stores):
         r = 13 + ri; pw_m = MISC_PW[code]; wk_m = MISC_WK[code]
         ws_misc.cell(r, 2).value = pw_m['spk_with'];   ws_misc.cell(r, 3).value = wk_m['spk_with']
