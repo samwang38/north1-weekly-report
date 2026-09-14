@@ -180,8 +180,10 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     # 機種週別台數要多帶「上一季 W13」參考欄，比 QTD_START 還早一週
     CLS_COLS  = eng.class_week_columns(wk_end)
     CLS_START = CLS_COLS[0][1]
+    # AAR 轉單：判員工主掛門市要回看 wk_end 前 N 天，1 月時會跨到去年
+    HOME_START = wk_end - timedelta(days=eng.AAR_HOME_DAYS - 1)
     cy_start = min(YTD_S_CY, WK_START, PW_START, MTD_START, PM_START, PM_SAME_START,
-                   QTD_START, CLS_START)
+                   QTD_START, CLS_START, HOME_START)
     df_cy = eng.load_from_epb(cy_start, cy_end, store_codes=STORE_CODES)
     log(f'  今年資料：{len(df_cy):,} 筆')
 
@@ -606,6 +608,45 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         ws_misc.cell(r, 6).value = pw_m['spk_without']; ws_misc.cell(r, 7).value = wk_m['spk_without']
         ws_misc.cell(r, 8).value = pct(wk_m['spk_without'], pw_m['spk_without'])
         ws_misc.cell(r, 9).value = wk_m['spk_without'] - pw_m['spk_without']
+
+    # AAR 轉單 APR 結教育價主機（喇叭表右邊 K~P 欄）
+    from copy import copy as _copy
+    SPK_ROW = 13                       # 喇叭表第一個門市列
+    AAR_COL = 11
+    aar_home = eng.emp_home_store(df_cy, wk_end)
+    aar_wk  = eng.aar_edu_units(df_cy, WK_START, wk_end, aar_home)
+    aar_mtd = eng.aar_edu_units(df_cy, MTD_START, MTD_END, aar_home)
+
+    def _aar_cell(r, c, value, style_rc):
+        cell = ws_misc.cell(r, c)
+        cell.value = value
+        src = ws_misc.cell(*style_rc)
+        cell._style = _copy(src._style)
+
+    _aar_cell(SPK_ROW - 2, AAR_COL, 'AAR轉單教育價主機', (SPK_ROW - 2, 1))
+    ws_misc.merge_cells(start_row=SPK_ROW - 2, start_column=AAR_COL,
+                        end_row=SPK_ROW - 2, end_column=AAR_COL + 5)
+    for i, h in enumerate(['AAR門市', '結帳門市',
+                           'iPad 本週', 'iPad 月累積', 'Mac 本週', 'Mac 月累積']):
+        _aar_cell(SPK_ROW - 1, AAR_COL + i, h, (SPK_ROW - 1, 2))
+    aar_rows = list(eng.AAR_TO_APR.items())
+    for i, (aar, apr) in enumerate(aar_rows):
+        rr = SPK_ROW + i
+        _aar_cell(rr, AAR_COL,     eng.STORES[aar], (SPK_ROW, 1))
+        _aar_cell(rr, AAR_COL + 1, eng.STORES[apr], (SPK_ROW, 1))
+        for j, v in enumerate([aar_wk[aar]['iPad'], aar_mtd[aar]['iPad'],
+                               aar_wk[aar]['Mac'],  aar_mtd[aar]['Mac']]):
+            _aar_cell(rr, AAR_COL + 2 + j, v, (SPK_ROW, 2))
+        log(f'  AAR {eng.STORES[aar]}→{eng.STORES[apr]}：本週 iPad {aar_wk[aar]["iPad"]} Mac {aar_wk[aar]["Mac"]}'
+            f'｜月累積 iPad {aar_mtd[aar]["iPad"]} Mac {aar_mtd[aar]["Mac"]}'
+            f'｜月累積經手人 {aar_mtd[aar]["emps"] or "無"}')
+    tr = SPK_ROW + len(aar_rows)
+    tot_style = (SPK_ROW + len(STORE_CODES), 2)
+    _aar_cell(tr, AAR_COL, 'Total', (SPK_ROW + len(STORE_CODES), 1))
+    _aar_cell(tr, AAR_COL + 1, None, tot_style)
+    for j in range(4):
+        c = AAR_COL + 2 + j; L = _gcl(c)
+        _aar_cell(tr, c, f'=SUM({L}{SPK_ROW}:{L}{tr - 1})', tot_style)
     for ri, code in enumerate(rows_stores):
         r = 23 + ri; pw_m = MISC_PW[code]; wk_m = MISC_WK[code]
         ws_misc.cell(r,  2).value = pw_m['iphone_host'];     ws_misc.cell(r, 12).value = wk_m['iphone_host']

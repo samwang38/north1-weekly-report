@@ -676,6 +676,58 @@ def edu_units_all(df: pd.DataFrame, start: date, end: date,
     return out
 
 
+# ─── AAR 轉單 APR 結教育價 ────────────────────────────────────────────
+# AAR 門市不能結教育價，教育價客人由 AAR 店員帶到 APR 門市結帳。
+# 判定：結帳門市＝對應 APR ＋ 主機那行的經手人主掛門市＝AAR ＋ 同單含教育 SKU。
+AAR_TO_APR = {'057': '046'}   # 羅東→阿波羅
+AAR_HOME_DAYS = 90   # 判主掛門市的回看天數（server 載入範圍要涵蓋）
+
+
+def _edu_doc_mask(d: pd.DataFrame) -> pd.Series:
+    """行遮罩：該行所在單據（地點＋單據）含教育價 SKU"""
+    docs = set(d.loc[d['存貨代碼'].isin(EDU_SKU), ['地點代碼', '單據代碼']]
+                .drop_duplicates().itertuples(index=False, name=None))
+    if not docs:
+        return pd.Series(False, index=d.index)
+    return pd.Series(list(zip(d['地點代碼'], d['單據代碼'])), index=d.index).isin(docs)
+
+
+def emp_home_store(df: pd.DataFrame, end: date, days: int = AAR_HOME_DAYS) -> dict[str, str]:
+    """估每位員工的主掛門市：近 N 天「非教育單」的主機淨台數最多的店，同分比單據數。
+
+    排除教育單是為了避免 AAR 店員在 APR 結的教育單，把他自己算成 APR 的人。
+    """
+    d = filter_period(df, end - timedelta(days=days - 1), end)
+    if d.empty:
+        return {}
+    d = d[~_edu_doc_mask(d)]
+    host = (d['類別3代碼'] == 3001.0) | d['品牌代碼'].isin(CERT_BRANDS)
+    sign = (d['交易類型'].isin(SALE_TYPES).astype(int)
+            - (d['交易類型'] == '銷退').astype(int))
+    h = d[host].assign(u=d.loc[host, '數量'].abs() * sign[host])
+    units = h.groupby(['員工代碼', '地點代碼'])['u'].sum()
+    docs = d.groupby(['員工代碼', '地點代碼'])['單據代碼'].nunique()
+    score = pd.DataFrame({'u': units, 'n': docs}).fillna(0).reset_index()
+    score = score.sort_values(['員工代碼', 'u', 'n'], ascending=[True, False, False])
+    return dict(score.drop_duplicates('員工代碼')[['員工代碼', '地點代碼']]
+                .itertuples(index=False, name=None))
+
+
+def aar_edu_units(df: pd.DataFrame, start: date, end: date,
+                  home: dict[str, str]) -> dict[str, dict]:
+    """回傳 {AAR店: {'iPad': n, 'Mac': n, 'emps': {員工: 台數}}}"""
+    out = {}
+    for aar, apr in AAR_TO_APR.items():
+        d = filter_period(df, start, end, apr)
+        m_aar = d['員工代碼'].map(home).eq(aar) & _edu_doc_mask(d)
+        r = {c: _net_units(d, m_aar & _edu_cat_mask(d, c)) for c in ('iPad', 'Mac')}
+        hm = m_aar & (_edu_cat_mask(d, 'iPad') | _edu_cat_mask(d, 'Mac'))
+        r['emps'] = {e: _net_units(g, pd.Series(True, index=g.index))
+                     for e, g in d[hm].groupby('員工代碼')}
+        out[aar] = r
+    return out
+
+
 def calc_accessory_by_c4(df: pd.DataFrame, start: date, end: date,
                           store_code: str | None, sa_codes: set[str]) -> dict[float, int]:
     d = filter_period(df, start, end, store_code)
