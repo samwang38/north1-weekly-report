@@ -1599,8 +1599,9 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
                     ws.cell(rr, c_out + k).value = f'=IF({den}=0,0,{L(c_num + k)}{rr}/{den})'
         return rt + 2
 
-    # ── 二、機型配件比較（照 BY店 本週其他細項 的 iPhone 配件件數表）──
-    def model_table(r, per):
+    # ── 二、機型配件比較（照 BY店 本週其他細項 的 iPhone 配件件數表，分門市）──
+    def model_tables(r, per):
+        """每個機型一張表 + 兩機型合計一張，列都是各店＋Total"""
         (cy_s, cy_e), (ly_s, ly_e) = lp[per]
         pairs = cfg['機型對照']                          # [[今年 label, 去年 label], …]
         by_label = ({m['label']: m for m in models[0]}, {m['label']: m for m in models[1]})
@@ -1611,14 +1612,14 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
                         f'首賣設定.json 的「機型對照」寫了 {lab!r}，'
                         f'但{"今年" if yi == 0 else "去年"}機型清單只有 {list(by_label[yi])}')
         tbl = ([by_label[0][x[0]] for x in pairs], [by_label[1][x[1]] for x in pairs])
-        A = {yi: eng.launch_attach(dfs[yi], *lp[per][yi], None, tbl[yi]) for yi in (0, 1)}
+        # 分門市各算一次（同一店內通用款只算一次，跨店相加不會重複，所以 Total 可以用 SUM）
+        A = {yi: {c: eng.launch_attach(dfs[yi], *lp[per][yi], c, tbl[yi]) for c in codes}
+             for yi in (0, 1)}
         items = [item for item, _ in eng.LAUNCH_ACC_ITEMS]
 
-        title(r, 'iPhone 配件件數（機型）', size=11)
-        r += 1
         heads = {2: f'去年 {ly_s:%m/%d}~{ly_e:%m/%d}',
                  12: f'今年 {cy_s:%m/%d}~{cy_e:%m/%d}', 22: '差異數量', 25: '差異金額'}
-        subs = {1: '機型'}
+        subs = {1: '門市'}
         for c0 in (2, 12):
             subs[c0] = 'iPhone台數'
             for j, item in enumerate(items):
@@ -1627,51 +1628,57 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
                 subs[c0 + 7 + j] = f'{item}佔比'
         for j, item in enumerate(items):
             subs[22 + j] = subs[25 + j] = item
-        for c in range(1, 28):
-            styled(tpl_misc, MISC_ROWS['head'], r, c, MISC_COLS[c], heads.get(c))
-            styled(tpl_misc, MISC_ROWS['sub'], r + 1, c, MISC_COLS[c], subs.get(c))
-        r0 = r + 2
-        rt = r0 + len(pairs)
-        for i in range(len(pairs) + 1):
-            rr, last = r0 + i, i == len(pairs)
+
+        def one_table(r, label, pick):
+            """pick(該店資料, yi) → 要填的 dict（某機型或兩機型合計）"""
+            title(r, f'iPhone 配件件數（{label}）', size=11)
+            r += 1
             for c in range(1, 28):
-                styled(tpl_misc, MISC_ROWS['total'] if last else MISC_ROWS['data'] + i,
-                       rr, c, MISC_COLS[c])
-            if last:
-                # 合計不是兩列相加：通用款（如 18 Pro/Pro Max 共用）只算一次
-                ws.cell(rr, 1).value = 'Total（不重複）'
+                styled(tpl_misc, MISC_ROWS['head'], r, c, MISC_COLS[c], heads.get(c))
+                styled(tpl_misc, MISC_ROWS['sub'], r + 1, c, MISC_COLS[c], subs.get(c))
+            r0 = r + 2
+            rt = r0 + len(codes)
+            for i, code in enumerate(codes + ['ALL']):
+                rr, last = r0 + i, code == 'ALL'
+                for c in range(1, 28):
+                    styled(tpl_misc, MISC_ROWS['total'] if last else MISC_ROWS['data'] + i,
+                           rr, c, MISC_COLS[c])
+                ws.cell(rr, 1).value = eng.STORES.get(code, 'Total')
                 for c0, yi in ((2, 1), (12, 0)):
-                    t = A[yi]['total']
-                    ws.cell(rr, c0).value = t['host']
-                    for j, item in enumerate(items):
-                        ws.cell(rr, c0 + 1 + j).value = t[item]
-                        ws.cell(rr, c0 + 4 + j).value = t[f'{item}_金額']
-            else:
-                m_cy, m_ly = tbl[0][i], tbl[1][i]
-                ws.cell(rr, 1).value = (f"{m_cy['label'].replace('iPhone ', '')}／"
-                                        f"{m_ly['label'].replace('iPhone ', '')}")
-                for c0, yi, m in ((2, 1, m_ly), (12, 0, m_cy)):
-                    d = A[yi]['models'][m['label']]
-                    ws.cell(rr, c0).value = d['host']
-                    for j, item in enumerate(items):
-                        ws.cell(rr, c0 + 1 + j).value = d[item]
-                        ws.cell(rr, c0 + 4 + j).value = d[f'{item}_金額']
-            for c0 in (2, 12):                                    # 佔比＝數量÷台數
-                for j in range(len(items)):
-                    den = f'{L(c0)}{rr}'
-                    ws.cell(rr, c0 + 7 + j).value = \
-                        f'=IF({den}=0,0,{L(c0 + 1 + j)}{rr}/{den})'
-            for j in range(len(items)):                            # 差異＝今年－去年
-                ws.cell(rr, 22 + j).value = f'={L(13 + j)}{rr}-{L(3 + j)}{rr}'
-                ws.cell(rr, 25 + j).value = f'={L(16 + j)}{rr}-{L(6 + j)}{rr}'
-        rr = rt + 1
-        note(rr, '配件依品名判機型。通用款（如「18 Pro/Pro Max」共用的鏡頭貼）在兩個機型各算一次，'
-                 '所以 Total 是不重複件數，不等於兩列相加。')
-        note(rr + 1, '對不到機型的 iPhone 配件（不列入本表）：'
+                    if last:
+                        for c in [c0] + [c0 + 1 + j for j in range(len(items))] \
+                                      + [c0 + 4 + j for j in range(len(items))]:
+                            ws.cell(rr, c).value = f'=SUM({L(c)}{r0}:{L(c)}{rt - 1})'
+                    else:
+                        d = pick(A[yi][code], yi)
+                        ws.cell(rr, c0).value = d['host']
+                        for j, item in enumerate(items):
+                            ws.cell(rr, c0 + 1 + j).value = d[item]
+                            ws.cell(rr, c0 + 4 + j).value = d[f'{item}_金額']
+                    for j in range(len(items)):                   # 佔比＝數量÷台數
+                        den = f'{L(c0)}{rr}'
+                        ws.cell(rr, c0 + 7 + j).value = \
+                            f'=IF({den}=0,0,{L(c0 + 1 + j)}{rr}/{den})'
+                for j in range(len(items)):                        # 差異＝今年－去年
+                    ws.cell(rr, 22 + j).value = f'={L(13 + j)}{rr}-{L(3 + j)}{rr}'
+                    ws.cell(rr, 25 + j).value = f'={L(16 + j)}{rr}-{L(6 + j)}{rr}'
+            return rt + 2
+
+        for i, (m_cy, m_ly) in enumerate(zip(tbl[0], tbl[1])):
+            lab = (f"{m_cy['label'].replace('iPhone ', '')}／"
+                   f"{m_ly['label'].replace('iPhone ', '')}")
+            r = one_table(r, lab, lambda a, yi, i=i:
+                          a['models'][tbl[yi][i]['label']])
+        r = one_table(r, '兩機型合計・不重複', lambda a, yi: a['total'])
+        note(r, '配件依品名判機型。通用款（如「18 Pro/Pro Max」共用的鏡頭貼）在兩個機型各算一次，'
+                '所以合計那張表不等於前兩張相加（同一店內只算一次）。')
+        other = {yi: {it: sum(A[yi][c]['acc_other'][it] for c in codes) for it in items}
+                 for yi in (0, 1)}
+        note(r + 1, '對不到機型的 iPhone 配件（不列入本表）：'
              + '；'.join(f'{"今年" if yi == 0 else "去年"} '
-                         + '、'.join(f'{k} {v:,}' for k, v in A[yi]['acc_other'].items())
+                         + '、'.join(f'{k} {v:,}' for k, v in other[yi].items())
                          for yi in (0, 1)) + '。')
-        return rr + 3
+        return r + 3
 
     # ── 版面 ──
     log('產生首賣比較分頁…')
@@ -1693,7 +1700,7 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
             n = f'（{lp["days"]} 天，截至 {lp["cum_end"]:%m/%d}）'
         title(r, f'■ {per_title}{n}', size=13)
         r = biz_table(r + 1, per)
-        r = model_table(r, per)
+        r = model_tables(r, per)
 
     # ── 三、配件銷售排名（累積期間）──
     (cy_s, cy_e), (ly_s, ly_e) = lp['cum']
