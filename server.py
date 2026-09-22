@@ -16,6 +16,10 @@ TRAFFIC_FILE = ROOT / 'data' / 'traffic_cache.json'
 CLASS_MAP_FILE = ROOT / 'data' / '機種對照.json'
 LOCAL_CONFIG = ROOT / 'local_config.json'   # 帳密/編制人數，不上 git
 
+# 保固合計搭售率目標（合計搭售率欄 → 目標%）：未達標轉紅字。
+# BY店 各表與首賣比較分頁共用。
+WARRANTY_TARGETS = {7: 0.60, 13: 0.40, 19: 0.50, 25: 0.30, 32: 0.35}
+
 
 def _load_local_config() -> dict:
     try:
@@ -108,8 +112,6 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     from openpyxl.formatting.rule import CellIsRule
     from openpyxl.styles import Font as _Font
 
-    # 保固合計搭售率目標（合計搭售率欄 → 目標%）：未達標轉紅字
-    WARRANTY_TARGETS = {7: 0.60, 13: 0.40, 19: 0.50, 25: 0.30, 32: 0.35}
     _RED_FONT = _Font(color='FFFF0000')
 
     WK_START = wk_end - timedelta(days=6)
@@ -1510,6 +1512,8 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
     dfs = (df_cy, df_ly)
     codes = list(eng.STORES)
     tpl_biz, tpl_misc = wb['BY店 本週比較'], wb['BY店 本週其他細項']
+    tpl_yoy = wb['BY店 去年同期']          # 台數表與保固搭售率表的樣式來源
+    _traffic_cache = _load_traffic()
 
     if LAUNCH_SHEET in wb.sheetnames:
         del wb[LAUNCH_SHEET]
@@ -1523,6 +1527,17 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
                        if str(tpl_misc.cell(r, 1).value or '').startswith('iPhone 配件件數')), None)
     if _misc_head is None:
         raise ValueError('範本「BY店 本週其他細項」找不到「iPhone 配件件數」子表，無法取樣式')
+    # 台數表（上月/本月那張）與保固搭售率表（iOS搭售率那張）在「BY店 去年同期」的列位
+    _unit_head = next((r for r in range(1, tpl_yoy.max_row + 1)
+                       if tpl_yoy.cell(r, 18).value == '上月'), None)
+    _acpp_head = next((r for r in range(1, tpl_yoy.max_row + 1)
+                       if tpl_yoy.cell(r, 26).value == 'iOS搭售率'), None)
+    if _unit_head is None or _acpp_head is None:
+        raise ValueError('範本「BY店 去年同期」找不到台數表或保固搭售率表，無法取樣式')
+    UNIT_ROWS = {'head': _unit_head, 'sub': _unit_head + 1, 'data': _unit_head + 2,
+                 'total': _unit_head + 2 + len(codes)}
+    ACPP_ROWS = {'head': _acpp_head, 'data': _acpp_head + 1,
+                 'total': _acpp_head + 1 + len(codes)}
     BIZ_ROWS  = {'head': 2, 'sub': 3, 'data': 4, 'total': 4 + len(codes)}
     MISC_ROWS = {'head': _misc_head, 'sub': _misc_head + 1, 'data': _misc_head + 2,
                  'total': _misc_head + 2 + len(codes)}
@@ -1598,6 +1613,123 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
                     den = f'{L(14 + k)}{rr}'
                     ws.cell(rr, c_out + k).value = f'=IF({den}=0,0,{L(c_num + k)}{rr}/{den})'
         return rt + 2
+
+    # ── 二、台數表（照 BY店 去年同期 上半的台數/人流/平均單價表）──
+    def units_table(r, per):
+        (cy_s, cy_e), (ly_s, ly_e) = lp[per]
+        M = {yi: {c: eng.calc_store_metrics(dfs[yi], *lp[per][yi], c, sa_prices)
+                  for c in codes + [None]} for yi in (0, 1)}   # None = 全區（平均單價用）
+        T = {yi: {c: _traffic_sum(_traffic_cache, c, *lp[per][yi]) for c in codes}
+             for yi in (0, 1)}
+        ly_lbl, cy_lbl = f'去年\n{ly_s:%m/%d}~{ly_e:%m/%d}', f'今年\n{cy_s:%m/%d}~{cy_e:%m/%d}'
+        title(r, '主機台數 · 成交筆數 · 人流 · 平均單價', size=11)
+        r += 1
+        heads = {2: 'CPU', 5: 'iPad', 8: 'iPhone', 11: 'Watch', 14: 'AirPods',
+                 18: '去年', 21: '今年', 26: '平均單價'}
+        subs = {1: '門市', 18: '成交筆數', 19: '人流', 20: '提袋率',
+                21: '成交筆數', 22: '人流', 23: '提袋率', 24: '差異人流', 25: '成長%',
+                26: ly_lbl, 27: cy_lbl, 28: '差異金額', 29: '成長%'}
+        for c0 in (2, 5, 8, 11, 14):
+            subs.update({c0: ly_lbl, c0 + 1: cy_lbl, c0 + 2: '成長%'})
+        for c in range(1, 30):
+            styled(tpl_yoy, UNIT_ROWS['head'], r, c, c, heads.get(c))
+            styled(tpl_yoy, UNIT_ROWS['sub'], r + 1, c, c, subs.get(c))
+        ws.row_dimensions[r].height = 20
+        ws.row_dimensions[r + 1].height = 32
+
+        r0 = r + 2
+        rt = r0 + len(codes)
+        units = [(2, 'cpu_units'), (5, 'ipad_units'), (8, 'iphone_units'),
+                 (11, 'watch_units'), (14, 'airpods_units')]
+        for i, code in enumerate(codes + ['ALL']):
+            rr, last = r0 + i, code == 'ALL'
+            for c in range(1, 30):
+                styled(tpl_yoy, UNIT_ROWS['total'] if last else UNIT_ROWS['data'] + i, rr, c, c)
+            ws.cell(rr, 1).value = eng.STORES.get(code, 'Total')
+            for c0, key in units + [(18, 'txn_count')]:
+                cols = (c0, c0 + 1) if c0 != 18 else (18, 21)
+                for k, c in enumerate(cols):
+                    yi = 1 - k                        # 先去年後今年
+                    ws.cell(rr, c).value = (f'=SUM({L(c)}{r0}:{L(c)}{rt - 1})' if last
+                                            else M[yi][code][key])
+                if c0 != 18:
+                    old_, new_ = f'{L(c0)}{rr}', f'{L(c0 + 1)}{rr}'
+                    ws.cell(rr, c0 + 2).value = f'=IF({old_}=0,0,({new_}-{old_})/ABS({old_}))'
+            # 人流：無計數器門市用公式估（同公版）、Total 加總、其餘吃快取
+            for c_txn, c_traf, yi in ((18, 19, 1), (21, 22, 0)):
+                if last:
+                    ws.cell(rr, c_traf).value = f'=SUM({L(c_traf)}{r0}:{L(c_traf)}{rt - 1})'
+                elif not T[yi].get(code):
+                    ws.cell(rr, c_traf).value = f'=ROUND({L(c_txn)}{rr}*0.85/0.3,0)'
+                else:
+                    ws.cell(rr, c_traf).value = T[yi][code]
+                den = f'{L(c_traf)}{rr}'
+                ws.cell(rr, c_traf + 1).value = f'=IF({den}=0,0,{L(c_txn)}{rr}/{den})'
+            ws.cell(rr, 24).value = f'=V{rr}-S{rr}'
+            ws.cell(rr, 25).value = f'=IF(S{rr}=0,0,(V{rr}-S{rr})/ABS(S{rr}))'
+            for yi_, c in ((1, 26), (0, 27)):    # 平均單價＝業績/筆數（Total 用全區值，同公版）
+                m = M[yi_][None if last else code]
+                ws.cell(rr, c).value = (round(m['total_excl_sa'] / m['txn_count'])
+                                        if m['txn_count'] else 0)
+            ws.cell(rr, 28).value = f'=AA{rr}-Z{rr}'
+            ws.cell(rr, 29).value = f'=IF(Z{rr}=0,0,(AA{rr}-Z{rr})/ABS(Z{rr}))'
+        return rt + 2
+
+    # ── 三、保固搭售率表（照 BY店 去年同期 下半，今年一張、去年一張）──
+    def warranty_tables(r, per):
+        from openpyxl.formatting.rule import CellIsRule
+        from openpyxl.styles import Font as _F
+        RED = _F(color='FFFF0000')
+        M = {yi: {c: eng.calc_store_metrics(dfs[yi], *lp[per][yi], c, sa_prices) for c in codes}
+             for yi in (0, 1)}
+        cats = [(2, 'cpu_units', 'acpp_mac', 'sa_cpu'), (8, 'watch_units', 'acpp_watch', 'sa_watch'),
+                (14, 'ipad_units', 'acpp_ipad', 'sa_ipad'),
+                (20, 'iphone_units', 'acpp_iphone', 'sa_iphone'),
+                (27, 'airpods_units', 'acpp_airpods', 'sa_airpods')]
+        heads = {2: 'CPU', 3: 'Mac ACPP+', 4: 'ACPP+搭售率', 5: 'Mac SACare', 6: 'SACare搭售率',
+                 7: '合計搭售率', 8: 'Watch', 9: 'Watch ACPP+', 10: 'ACPP+搭售率',
+                 11: 'Watch SACare', 12: 'SACare搭售率', 13: '合計搭售率',
+                 14: 'iPad', 15: 'iPad ACPP+', 16: 'ACPP+搭售率', 17: 'iPad SACare',
+                 18: 'SACare搭售率', 19: '合計搭售率', 20: 'iPhone', 21: 'iPhone ACPP+',
+                 22: 'ACPP+搭售率', 23: 'iPhone SACare', 24: 'SACare搭售率', 25: '合計搭售率',
+                 26: 'iOS搭售率', 27: 'Airpods', 28: 'ACPP+', 29: 'ACPP+搭售率',
+                 30: 'SACare', 31: 'SACare搭售率', 32: '合計搭售率'}
+        for yi in (1, 0):                                   # 先去年、再今年
+            s, e = lp[per][yi]
+            tag = '今年' if yi == 0 else '去年'
+            title(r, f'保固搭售率（{tag} {s:%m/%d}~{e:%m/%d}）', size=11)
+            r += 1
+            for c in range(1, 33):
+                styled(tpl_yoy, ACPP_ROWS['head'], r, c, c,
+                       f'{tag}\n{s:%m/%d}~{e:%m/%d}' if c == 1 else heads.get(c))
+            ws.row_dimensions[r].height = 32
+            r0 = r + 1
+            rt = r0 + len(codes)
+            for i, code in enumerate(codes + ['ALL']):
+                rr, last = r0 + i, code == 'ALL'
+                for c in range(1, 33):
+                    styled(tpl_yoy, ACPP_ROWS['total'] if last else ACPP_ROWS['data'] + i, rr, c, c)
+                ws.cell(rr, 1).value = eng.STORES.get(code, 'Total')
+                m = None if last else M[yi][code]
+                for c0, u_key, a_key, s_key in cats:
+                    for c, key in ((c0, u_key), (c0 + 1, a_key), (c0 + 3, s_key)):
+                        ws.cell(rr, c).value = (f'=SUM({L(c)}{r0}:{L(c)}{rt - 1})' if last
+                                                else m[key])
+                    den = f'{L(c0)}{rr}'
+                    ws.cell(rr, c0 + 2).value = f'=IF({den}=0,0,{L(c0 + 1)}{rr}/{den})'
+                    ws.cell(rr, c0 + 4).value = f'=IF({den}=0,0,{L(c0 + 3)}{rr}/{den})'
+                    ws.cell(rr, c0 + 5).value = \
+                        f'=IF({den}=0,0,({L(c0 + 1)}{rr}+{L(c0 + 3)}{rr})/{den})'
+                # iOS 搭售率＝(iPhone+iPad 的 ACPP+ 與 SACare)/(iPhone+iPad 台數)
+                ws.cell(rr, 26).value = (f'=IF(T{rr}+N{rr}=0,0,'
+                                         f'(U{rr}+W{rr}+O{rr}+Q{rr})/(T{rr}+N{rr}))')
+            # 合計搭售率未達目標轉紅字（同公版 WARRANTY_TARGETS）
+            for col, tgt in WARRANTY_TARGETS.items():
+                ws.conditional_formatting.add(
+                    f'{L(col)}{r0}:{L(col)}{rt}',
+                    CellIsRule(operator='lessThan', formula=[str(tgt)], font=RED))
+            r = rt + 2
+        return r
 
     # ── 二、機型配件比較（照 BY店 本週其他細項 的 iPhone 配件件數表，分門市）──
     def model_tables(r, per):
@@ -1700,6 +1832,8 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
             n = f'（{lp["days"]} 天，截至 {lp["cum_end"]:%m/%d}）'
         title(r, f'■ {per_title}{n}', size=13)
         r = biz_table(r + 1, per)
+        r = units_table(r, per)
+        r = warranty_tables(r, per)
         r = model_tables(r, per)
 
     # ── 三、配件銷售排名（累積期間）──
