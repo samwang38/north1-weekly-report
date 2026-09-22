@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from pathlib import Path
 import pandas as pd
@@ -1260,3 +1261,125 @@ def units_by_class_week(df: pd.DataFrame, wk_end: date, mapping: dict):
             rows.append({'group': g['name'], 'label': label,
                          'units': weeks(m), 'auto': True})
     return cols, rows
+
+
+# ─── 首賣比較（新 iPhone 首賣：新品搭售率）──────────────────────────────
+# 機型歸屬靠品名：配件/保固品名寫的是「iPhone 18 Pro/Pro Max」「iPhone 17/17 Pro」
+# 「S.A CARE … iPhone 16 Pro /16 Pro Max / 17 Pro /17 Pro Max / Air」這類。
+# 一個品名可對到多個機型（通用款），每個機型各算一次、合計只算一次。
+# 型號字樣後面不可緊接英數或小數點，避免「2.5D」「3D」被當成代數。
+_LAUNCH_TOKEN = re.compile(r'\s*([/&]|(?:\d{2}E?|PRO|MAX|PLUS|AIR|MINI)(?![A-Z0-9.]))')
+
+
+def launch_model_key(s: str) -> str:
+    """設定檔的機型字樣 → 比對用 key（大寫、單空白），例 '18 Pro Max' → '18 PRO MAX'"""
+    return ' '.join(str(s).upper().split())
+
+
+def launch_model_keys(name: str) -> set[str]:
+    """品名提到的 iPhone 機型 → {'17', '17 PRO', 'AIR', ...}
+
+    規則：以「/」或「&」分段；段內沒寫代數就沿用前一段（「17 Pro / Pro Max」）；
+    只有代數、下一段是不同代數且有後綴時共用後綴（「18/17 Pro Max」＝18 Pro Max＋17 Pro Max）；
+    Air 沒有代數。
+    """
+    keys = set()
+    for chunk in str(name).upper().split('IPHONE')[1:]:
+        toks, pos = [], 0
+        while (m := _LAUNCH_TOKEN.match(chunk, pos)):
+            toks.append(m.group(1))
+            pos = m.end()
+        segs, cur = [], []
+        for t in toks + ['/']:
+            if t in '/&':
+                if cur:
+                    gen = next((x for x in cur if x[0].isdigit()), None)
+                    segs.append((gen, ' '.join(x for x in cur if not x[0].isdigit())))
+                cur = []
+            else:
+                cur.append(t)
+        prev_gen = None
+        for i, (gen, suf) in enumerate(segs):
+            if suf == 'AIR':
+                keys.add('AIR')
+                continue
+            gen = gen or prev_gen
+            if gen is None:
+                continue
+            if not suf and i + 1 < len(segs):
+                n_gen, n_suf = segs[i + 1]
+                if n_gen and n_gen != gen and n_suf and n_suf != 'AIR':
+                    suf = n_suf
+            keys.add(f'{gen} {suf}'.strip())
+            prev_gen = gen
+    return keys
+
+
+# 機型配件表的項目：(key, 類別6 集合)
+LAUNCH_ACC_ITEMS = [('保貼', C6_SCREEN_PROT), ('保護殼', C6_CASE), ('鏡頭貼', C6_LENS_PROT)]
+
+
+def _gift_mask(d: pd.DataFrame) -> pd.Series:
+    """贈品（搭贈）：單價 0 的銷售列與其銷退"""
+    return (d['NET'] == 0) & d['交易類型'].isin({'銷售', '銷退'})
+
+
+def launch_attach(df: pd.DataFrame, start: date, end: date, store_code: str | None,
+                  models: list[dict]) -> dict:
+    """首賣機型的台數與 iPhone 配件（保貼／保護殼／鏡頭貼）件數、金額。
+
+    models = 設定檔的機型清單 [{'label', 'cat6', '品名'}]
+    - 台數：類別3=3001、類別4=4004、類別6=機型 cat6，排除認證機品牌，銷售＋尾款－銷退
+    - 配件：類別4=4009，依品名判機型（launch_model_keys）；件數含贈品、金額 signed NET，
+      與 accessory_units_revenue 同口徑。通用款（如 17/17 Pro）在每個機型各算一次，
+      所以 total 是「對到任一款」的不重複件數，不等於各機型相加。
+    回傳 {'models': {label: {'host', '保貼', '保貼_金額', …}}, 'total': {...},
+          'acc_other': {item: 對不到機型的件數}}
+    """
+    d = filter_period(df, start, end, store_code)
+    key_to_label = {launch_model_key(m['品名']): m['label'] for m in models}
+
+    host_base = (d['類別3代碼'] == 3001.0) & (d['類別4代碼'] == 4004.0) & \
+        ~d['品牌代碼'].isin(CERT_BRANDS)
+    acc_base = d['類別4代碼'] == 4009.0
+    # 只對配件列解析品名；用 frozenset 避免整欄共用同一個可變物件
+    acc_labels = d.loc[acc_base, '名稱'].map(
+        lambda s: frozenset(key_to_label[k] for k in launch_model_keys(s) if k in key_to_label))
+
+    def acc_mask(pred) -> pd.Series:
+        """配件列中符合 pred(該列對到的機型集合) 的遮罩"""
+        m = pd.Series(False, index=d.index)
+        if len(acc_labels):
+            m.loc[acc_labels.index] = acc_labels.map(pred)
+        return m
+
+    res = {'models': {}, 'total': {}, 'acc_other': {}}
+    for m in models:
+        lab = m['label']
+        mine = acc_mask(lambda s, lab=lab: lab in s)
+        r = {'host': _units_revenue(d, host_base & (d['類別6代碼'] == float(m['cat6'])))[0]}
+        for item, c6 in LAUNCH_ACC_ITEMS:
+            r[item], r[f'{item}_金額'] = _units_revenue(d, mine & d['類別6代碼'].isin(c6))
+        res['models'][lab] = r
+
+    any_hit, no_hit = acc_mask(bool), acc_mask(lambda s: not s)
+    res['total']['host'] = sum(r['host'] for r in res['models'].values())
+    for item, c6 in LAUNCH_ACC_ITEMS:
+        in_item = d['類別6代碼'].isin(c6)
+        res['total'][item], res['total'][f'{item}_金額'] = \
+            _units_revenue(d, any_hit & in_item)
+        res['acc_other'][item] = _units_revenue(d, no_hit & in_item)[0]
+    return res
+
+
+def launch_acc_ranking(df: pd.DataFrame, start: date, end: date, top: int = 20) -> list[tuple]:
+    """iPhone 配件（4009）銷售排名，排除贈品，依金額由大到小 → [(品名, 件數, 金額)]"""
+    d = filter_period(df, start, end)
+    d = d[(d['類別4代碼'] == 4009.0) & ~_gift_mask(d)]
+    rows = []
+    for _, g in d.groupby('存貨代碼'):
+        u, amt = _units_revenue(g, pd.Series(True, index=g.index))
+        name = g.loc[g['NET'].idxmax(), '名稱'] if len(g) else ''
+        rows.append((name, u, amt))
+    rows.sort(key=lambda x: -x[2])
+    return rows[:top]

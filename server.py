@@ -2,7 +2,7 @@
 """北一區週報產生器 — 本機 Web 工具"""
 import json, os, sys, time, threading, traceback, urllib.parse, uuid
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
@@ -173,7 +173,10 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
 
     log('載入今年銷售資料（EPB）…')
     # 跨月週(如 6/28~7/4)時 YTD_E_CY=MTD_END=6/30，載入須延伸到 wk_end 才不會漏本週的 7 月資料
+    LAUNCH = _launch_periods(wk_end)
     cy_end = max(wk_end, MTD_END, YTD_E_CY)
+    if LAUNCH:
+        cy_end = max(cy_end, LAUNCH['p3'][0][1], LAUNCH['cum'][0][1])
     # 1 月的週報「上週/上月/上月同期」落在去年 12 月，起始日也要往前延伸才不會整欄變 0
     # QTD_START 必須納入：跨年的季（如 FY27 Q2 起於 2026-12-27）會早於 YTD_S_CY，
     # 漏掉就是「1 月週報缺料」那類截斷 bug 的翻版。
@@ -184,11 +187,19 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     HOME_START = wk_end - timedelta(days=eng.AAR_HOME_DAYS - 1)
     cy_start = min(YTD_S_CY, WK_START, PW_START, MTD_START, PM_START, PM_SAME_START,
                    QTD_START, CLS_START, HOME_START)
+    # 首賣比較：今年首賣日可能早於 1/1（年初的週報），去年累積會超過 LYMO_END
+    if LAUNCH:
+        cy_start = min(cy_start, LAUNCH['cum'][0][0])
     df_cy = eng.load_from_epb(cy_start, cy_end, store_codes=STORE_CODES)
     log(f'  今年資料：{len(df_cy):,} 筆')
 
     ly_end = max(LYW_END, LYMO_END, YTD_E_LY)
     ly_start = min(YTD_S_LY, LYW_START, LYMO_START)
+    if LAUNCH:
+        # 首三天窗是固定 3 天，可能比累積窗還晚結束（週報結束日在首賣後第 1~2 天時），
+        # 兩個窗都要算進載入範圍，否則去年的第 3 天會被截掉
+        ly_start = min(ly_start, LAUNCH['cum'][1][0], LAUNCH['p3'][1][0])
+        ly_end = max(ly_end, LAUNCH['cum'][1][1], LAUNCH['p3'][1][1])
     log('載入去年銷售資料（EPB）…')
     df_ly = eng.load_from_epb(ly_start, ly_end, store_codes=STORE_CODES)
     log(f'  去年資料：{len(df_ly):,} 筆')
@@ -1062,6 +1073,10 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
     # ── 機種週別台數 ──
     _fill_class_weeks(wb, df_cy, wk_end, log)
 
+    # ── 首賣比較（新 iPhone 首賣後 LAUNCH_SHOW_DAYS 天內才有）──
+    if LAUNCH:
+        _fill_launch_compare(wb, df_cy, df_ly, LAUNCH, sa_prices, log)
+
     # ── 月進度（本月快照 + 1月至今逐月趨勢）──
     log('產生月進度分頁…')
     _months = []
@@ -1440,6 +1455,270 @@ def _fill_class_weeks(wb, df, wk_end: date, log):
         log(f'  ⚠️ 機種表有 {len(autos)} 個新機種自動成列：{"、".join(autos)}')
 
     log(f'機種週別台數：FY{fy} Q{q} W01~W{len(cols) - 1:02d}，{len(rows)} 個機種')
+
+
+LAUNCH_FILE      = ROOT / 'data' / '首賣設定.json'
+LAUNCH_SHEET     = '首賣比較'
+LAUNCH_SHOW_DAYS = 90   # 首賣後幾天內的週報才產生「首賣比較」分頁
+
+
+def _launch_periods(wk_end: date, today: date = None):
+    """首賣比較的期間（今年, 去年）。週報結束日不在首賣後 LAUNCH_SHOW_DAYS 天內 → None。
+
+    首三天：固定首賣日起 3 天（今年 首賣日~+2、去年 首賣日~+2），不被週報結束日截掉；
+      第 3 天還沒過完時，今年那幾欄就只有已發生的天數（表上會註明）。
+    累積：今年首賣日 ~ **匯出前一天**。首賣數字每天都在累加，所以截點跟著匯出日走、
+      不是週報結束日（否則週一產上週的報表看不到週末之後的累積）；收在前一天是因為
+      匯出當天還沒營業完，半天拿去比去年一整天不對等。去年對齊同樣天數。
+    """
+    if not LAUNCH_FILE.exists():
+        return None
+    cfg = json.loads(LAUNCH_FILE.read_text(encoding='utf-8'))
+    cy_l = date.fromisoformat(cfg['今年']['首賣日'])
+    ly_l = date.fromisoformat(cfg['去年']['首賣日'])
+    if not (0 <= (wk_end - cy_l).days < LAUNCH_SHOW_DAYS):
+        return None
+    today = today or date.today()
+    # 匯出前一天；首賣當天就匯出時前一天還在首賣前，只能收在首賣日本身
+    cum_end = max(cy_l, today - timedelta(days=1))
+    days = (cum_end - cy_l).days + 1
+    p3_end = cy_l + timedelta(days=2)
+    return {
+        'cfg': cfg, 'days': days, 'p3_end': p3_end,
+        'p3_ready': p3_end < today, 'cum_end': cum_end,
+        'p3':  ((cy_l, p3_end), (ly_l, ly_l + timedelta(days=2))),
+        'cum': ((cy_l, cum_end), (ly_l, ly_l + timedelta(days=days - 1))),
+    }
+
+
+def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
+    """產生「首賣比較」分頁：首三天與累積各一組，版面與樣式都照公版。
+
+    一、門市業績比較 —— 照「BY店 本週比較」，上週/本週換成去年/今年，
+        並在 SA Care 搭售率後面加 AC 搭售率。
+    二、機型配件比較 —— 照「BY店 本週其他細項」的 iPhone 配件件數表，
+        18 Pro／17 Pro、18 Pro Max／17 Pro Max、Total 三列。
+    三、配件銷售排名 Top 20（累積期間）。
+    樣式（字型、底色、框線、數字格式）逐格從公版分頁複製，所以和 BY店 各表一致。
+    """
+    from copy import copy as _copy
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter as L
+
+    cfg = lp['cfg']
+    models = (cfg['今年']['機型'], cfg['去年']['機型'])   # 0=今年, 1=去年
+    dfs = (df_cy, df_ly)
+    codes = list(eng.STORES)
+    tpl_biz, tpl_misc = wb['BY店 本週比較'], wb['BY店 本週其他細項']
+
+    if LAUNCH_SHEET in wb.sheetnames:
+        del wb[LAUNCH_SHEET]
+    ws = wb.create_sheet(LAUNCH_SHEET)
+
+    # 公版樣式來源列：群組表頭／子表頭／資料列／Total 列
+    BIZ_ROWS  = {'head': 2,  'sub': 3,  'data': 4,  'total': 10}
+    MISC_ROWS = {'head': 21, 'sub': 22, 'data': 23, 'total': 29}
+    # 我的欄 → 公版欄（業績表多了 AC搭售率 兩欄，樣式借 SA Care 搭售率那兩欄）
+    BIZ_COLS = {**{c: c for c in range(1, 28)}, 28: 26, 29: 27, 30: 28, 31: 29, 32: 30}
+    MISC_COLS = {c: c for c in range(1, 28)}
+
+    def styled(src_ws, src_r, r, c, src_c, v=None):
+        x = ws.cell(r, c)
+        if v is not None:
+            x.value = v
+        x._style = _copy(src_ws.cell(src_r, src_c)._style)
+        return x
+
+    def title(r, text, size=12):
+        ws.cell(r, 1).value = text
+        ws.cell(r, 1).font = Font(name='Microsoft JhengHei', bold=True, size=size,
+                                  color='FF1F3864')
+
+    def note(r, text):
+        ws.cell(r, 1).value = text
+        ws.cell(r, 1).font = Font(name='Microsoft JhengHei', size=9, color='FF808080')
+
+    # ── 一、門市業績比較（照 BY店 本週比較）──
+    def biz_table(r, per):
+        (cy_s, cy_e), (ly_s, ly_e) = lp[per]
+        M = {yi: {c: eng.calc_store_metrics(dfs[yi], *lp[per][yi], c, sa_prices) for c in codes}
+             for yi in (0, 1)}
+        ly_lbl, cy_lbl = f'去年\n{ly_s:%m/%d}~{ly_e:%m/%d}', f'今年\n{cy_s:%m/%d}~{cy_e:%m/%d}'
+        heads = {2: '總業績(未加SA Care)', 5: '3PP(未加SA Care)', 8: 'SA Care',
+                 11: 'AC', 14: '總業績', 17: '3PP', 20: '總業績差異',
+                 21: '3PP(未加SA Care)差異', 22: 'SA Care差異', 23: 'AC差異',
+                 24: '3PP搭售率(未加Care)', 26: 'SA Care搭售率', 28: 'AC搭售率', 30: '禮券金額'}
+        subs = {1: '門市'}
+        for c0 in (2, 5, 8, 11, 14, 17, 30):            # 去年／今年／成長%
+            subs.update({c0: ly_lbl, c0 + 1: cy_lbl, c0 + 2: '成長%'})
+        for c0 in (24, 26, 28):                          # 搭售率只有去年／今年
+            subs.update({c0: ly_lbl, c0 + 1: cy_lbl})
+        for c in range(1, 33):
+            styled(tpl_biz, BIZ_ROWS['head'], r, c, BIZ_COLS[c], heads.get(c))
+            styled(tpl_biz, BIZ_ROWS['sub'], r + 1, c, BIZ_COLS[c], subs.get(c))
+        # 不合併儲存格：公版「BY店 本週比較」的群組標題也是靠文字溢出顯示，
+        # 而且 openpyxl 存檔時會把合併範圍內非左上格的樣式丟掉（底色、框線會缺一塊）
+        ws.row_dimensions[r].height = 36
+        ws.row_dimensions[r + 1].height = 42
+
+        r0 = r + 2
+        rt = r0 + len(codes)
+        keys = [(2, 'total_excl_sa'), (5, 'tpp_excl_sa'), (8, 'sa_rev'), (11, 'acpp_plus'),
+                (14, 'total_rev'), (17, 'tpp_rev'), (30, 'coupon_rev')]
+        for i, code in enumerate(codes + ['ALL']):
+            rr, last = r0 + i, code == 'ALL'
+            src_r = BIZ_ROWS['total'] if last else BIZ_ROWS['data'] + i
+            for c in range(1, 33):
+                styled(tpl_biz, src_r, rr, c, BIZ_COLS[c])
+            ws.cell(rr, 1).value = eng.STORES.get(code, 'Total')
+            ws.row_dimensions[rr].height = 20
+            for c0, key in keys:
+                if last:
+                    for c in (c0, c0 + 1):
+                        ws.cell(rr, c).value = f'=SUM({L(c)}{r0}:{L(c)}{rt - 1})'
+                else:
+                    ws.cell(rr, c0).value = M[1][code][key]
+                    ws.cell(rr, c0 + 1).value = M[0][code][key]
+                old, nw = f'{L(c0)}{rr}', f'{L(c0 + 1)}{rr}'
+                ws.cell(rr, c0 + 2).value = f'=IF({old}=0,0,({nw}-{old})/ABS({old}))'
+            # 差異：總業績（含SA，O−N）／3PP(未加SA)／SA Care／AC
+            for c_out, c0 in ((20, 14), (21, 5), (22, 8), (23, 11)):
+                ws.cell(rr, c_out).value = f'={L(c0 + 1)}{rr}-{L(c0)}{rr}'
+            # 搭售率：分子÷總業績(含SA)，去年用 N 欄、今年用 O 欄
+            for c_out, c_num in ((24, 5), (26, 8), (28, 11)):
+                for k in (0, 1):
+                    den = f'{L(14 + k)}{rr}'
+                    ws.cell(rr, c_out + k).value = f'=IF({den}=0,0,{L(c_num + k)}{rr}/{den})'
+        return rt + 2
+
+    # ── 二、機型配件比較（照 BY店 本週其他細項 的 iPhone 配件件數表）──
+    def model_table(r, per):
+        (cy_s, cy_e), (ly_s, ly_e) = lp[per]
+        pairs = cfg['機型對照']                          # [[今年 label, 去年 label], …]
+        by_label = ({m['label']: m for m in models[0]}, {m['label']: m for m in models[1]})
+        for x in pairs:                                  # 設定檔打錯字要講清楚
+            for yi, lab in enumerate(x):
+                if lab not in by_label[yi]:
+                    raise ValueError(
+                        f'首賣設定.json 的「機型對照」寫了 {lab!r}，'
+                        f'但{"今年" if yi == 0 else "去年"}機型清單只有 {list(by_label[yi])}')
+        tbl = ([by_label[0][x[0]] for x in pairs], [by_label[1][x[1]] for x in pairs])
+        A = {yi: eng.launch_attach(dfs[yi], *lp[per][yi], None, tbl[yi]) for yi in (0, 1)}
+        items = [item for item, _ in eng.LAUNCH_ACC_ITEMS]
+
+        title(r, 'iPhone 配件件數（機型）', size=11)
+        r += 1
+        heads = {2: f'去年 {ly_s:%m/%d}~{ly_e:%m/%d}',
+                 12: f'今年 {cy_s:%m/%d}~{cy_e:%m/%d}', 22: '差異數量', 25: '差異金額'}
+        subs = {1: '機型'}
+        for c0 in (2, 12):
+            subs[c0] = 'iPhone台數'
+            for j, item in enumerate(items):
+                subs[c0 + 1 + j] = f'{item}數量'
+                subs[c0 + 4 + j] = f'{item}金額'
+                subs[c0 + 7 + j] = f'{item}佔比'
+        for j, item in enumerate(items):
+            subs[22 + j] = subs[25 + j] = item
+        for c in range(1, 28):
+            styled(tpl_misc, MISC_ROWS['head'], r, c, MISC_COLS[c], heads.get(c))
+            styled(tpl_misc, MISC_ROWS['sub'], r + 1, c, MISC_COLS[c], subs.get(c))
+        r0 = r + 2
+        rt = r0 + len(pairs)
+        for i in range(len(pairs) + 1):
+            rr, last = r0 + i, i == len(pairs)
+            for c in range(1, 28):
+                styled(tpl_misc, MISC_ROWS['total'] if last else MISC_ROWS['data'] + i,
+                       rr, c, MISC_COLS[c])
+            if last:
+                # 合計不是兩列相加：通用款（如 18 Pro/Pro Max 共用）只算一次
+                ws.cell(rr, 1).value = 'Total（不重複）'
+                for c0, yi in ((2, 1), (12, 0)):
+                    t = A[yi]['total']
+                    ws.cell(rr, c0).value = t['host']
+                    for j, item in enumerate(items):
+                        ws.cell(rr, c0 + 1 + j).value = t[item]
+                        ws.cell(rr, c0 + 4 + j).value = t[f'{item}_金額']
+            else:
+                m_cy, m_ly = tbl[0][i], tbl[1][i]
+                ws.cell(rr, 1).value = (f"{m_cy['label'].replace('iPhone ', '')}／"
+                                        f"{m_ly['label'].replace('iPhone ', '')}")
+                for c0, yi, m in ((2, 1, m_ly), (12, 0, m_cy)):
+                    d = A[yi]['models'][m['label']]
+                    ws.cell(rr, c0).value = d['host']
+                    for j, item in enumerate(items):
+                        ws.cell(rr, c0 + 1 + j).value = d[item]
+                        ws.cell(rr, c0 + 4 + j).value = d[f'{item}_金額']
+            for c0 in (2, 12):                                    # 佔比＝數量÷台數
+                for j in range(len(items)):
+                    den = f'{L(c0)}{rr}'
+                    ws.cell(rr, c0 + 7 + j).value = \
+                        f'=IF({den}=0,0,{L(c0 + 1 + j)}{rr}/{den})'
+            for j in range(len(items)):                            # 差異＝今年－去年
+                ws.cell(rr, 22 + j).value = f'={L(13 + j)}{rr}-{L(3 + j)}{rr}'
+                ws.cell(rr, 25 + j).value = f'={L(16 + j)}{rr}-{L(6 + j)}{rr}'
+        rr = rt + 1
+        note(rr, '配件依品名判機型。通用款（如「18 Pro/Pro Max」共用的鏡頭貼）在兩個機型各算一次，'
+                 '所以 Total 是不重複件數，不等於兩列相加。')
+        note(rr + 1, '對不到機型的 iPhone 配件（不列入本表）：'
+             + '；'.join(f'{"今年" if yi == 0 else "去年"} '
+                         + '、'.join(f'{k} {v:,}' for k, v in A[yi]['acc_other'].items())
+                         for yi in (0, 1)) + '。')
+        return rr + 3
+
+    # ── 版面 ──
+    log('產生首賣比較分頁…')
+    cy_names = '/'.join(m['label'].replace('iPhone ', '') for m in models[0])
+    ly_names = '/'.join(m['label'].replace('iPhone ', '') for m in models[1])
+    title(1, f'iPhone 首賣比較  ·  今年 {cy_names}（{lp["cum"][0][0]:%Y/%m/%d} 首賣）'
+             f'  vs  去年 {ly_names}（{lp["cum"][1][0]:%Y/%m/%d} 首賣）', size=14)
+    note(2, '業績表＝門市全品項，口徑與「BY店 本週比較」相同（搭售率分母＝總業績含SA）。'
+            '機型表只比 Pro 與 Pro Max，配件件數含贈品。今年 iPhone 不販售 SA Care。'
+            f'累積＝首賣日～匯出前一天（數字每天累加，不含匯出當天的半天）；'
+            f'本次匯出 {datetime.now():%Y/%m/%d %H:%M}。')
+
+    r = 4
+    for per, per_title in (('p3', '首三天'), ('cum', '首賣至今累積')):
+        if per == 'p3':
+            n = ('（3 天）' if lp['p3_ready']
+                 else f'（3 天；今年到 {lp["p3_end"]:%m/%d} 為止，當天資料可能還沒齊）')
+        else:
+            n = f'（{lp["days"]} 天，截至 {lp["cum_end"]:%m/%d}）'
+        title(r, f'■ {per_title}{n}', size=13)
+        r = biz_table(r + 1, per)
+        r = model_table(r, per)
+
+    # ── 三、配件銷售排名（累積期間）──
+    (cy_s, cy_e), (ly_s, ly_e) = lp['cum']
+    title(r, f'iPhone 配件銷售排名 Top 20（首賣至今累積，{REGION_NAME}，排除贈品，依金額）')
+    r += 1
+    rank = (eng.launch_acc_ranking(df_cy, cy_s, cy_e), eng.launch_acc_ranking(df_ly, ly_s, ly_e))
+    styled(tpl_misc, MISC_ROWS['head'], r, 1, 1, '排名')
+    for yi, c0 in ((1, 2), (0, 9)):
+        lbl = (f'去年 {ly_s:%m/%d}~{ly_e:%m/%d}' if yi else f'今年 {cy_s:%m/%d}~{cy_e:%m/%d}')
+        for c in range(c0, c0 + 7):
+            styled(tpl_misc, MISC_ROWS['head'], r, c, 2)
+        ws.cell(r, c0).value = f'{lbl} 品名'
+        ws.cell(r, c0 + 5).value = '件數'
+        ws.cell(r, c0 + 6).value = '金額'
+    for k in range(20):
+        rr = r + 1 + k
+        styled(tpl_misc, MISC_ROWS['data'], rr, 1, 1, k + 1)
+        ws.cell(rr, 1).alignment = Alignment(horizontal='center', vertical='center')
+        for yi, c0 in ((1, 2), (0, 9)):
+            name, u, amt = rank[yi][k] if k < len(rank[yi]) else ('', None, None)
+            for c in range(c0, c0 + 7):
+                styled(tpl_misc, MISC_ROWS['data'], rr, c, 2)
+            ws.cell(rr, c0).value = name
+            ws.cell(rr, c0).alignment = Alignment(horizontal='left', vertical='center')
+            ws.cell(rr, c0 + 5).value = u
+            ws.cell(rr, c0 + 6).value = amt
+
+    ws.column_dimensions['A'].width = 19
+    for c in range(2, 33):
+        ws.column_dimensions[L(c)].width = 13
+    ws.freeze_panes = 'B4'
+    log(f'  首賣比較：首三天 3 天、累積 {lp["days"]} 天')
+
 
 def _verify_structure(wb, rows_stores, log):
     """產報前驗證版面：店名是否落在正確列、分頁是否齊全、日期是否有填。
