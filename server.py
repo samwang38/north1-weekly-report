@@ -1515,9 +1515,17 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
         del wb[LAUNCH_SHEET]
     ws = wb.create_sheet(LAUNCH_SHEET)
 
-    # 公版樣式來源列：群組表頭／子表頭／資料列／Total 列
-    BIZ_ROWS  = {'head': 2,  'sub': 3,  'data': 4,  'total': 10}
-    MISC_ROWS = {'head': 21, 'sub': 22, 'data': 23, 'total': 29}
+    # 公版樣式來源列：群組表頭／子表頭／資料列／Total 列。
+    # 依店數推算，北一（6 店）北二（7 店）共用同一份程式碼：
+    # 本週比較 資料列從 4 起、Total 緊接在各店之後；
+    # 其他細項的 iPhone 配件件數子表起始列兩區不同（北一 21、北二 23），用 A 欄標題找。
+    _misc_head = next((r for r in range(1, tpl_misc.max_row + 1)
+                       if str(tpl_misc.cell(r, 1).value or '').startswith('iPhone 配件件數')), None)
+    if _misc_head is None:
+        raise ValueError('範本「BY店 本週其他細項」找不到「iPhone 配件件數」子表，無法取樣式')
+    BIZ_ROWS  = {'head': 2, 'sub': 3, 'data': 4, 'total': 4 + len(codes)}
+    MISC_ROWS = {'head': _misc_head, 'sub': _misc_head + 1, 'data': _misc_head + 2,
+                 'total': _misc_head + 2 + len(codes)}
     # 我的欄 → 公版欄（業績表多了 AC搭售率 兩欄，樣式借 SA Care 搭售率那兩欄）
     BIZ_COLS = {**{c: c for c in range(1, 28)}, 28: 26, 29: 27, 30: 28, 31: 29, 32: 30}
     MISC_COLS = {c: c for c in range(1, 28)}
