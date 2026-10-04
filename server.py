@@ -503,22 +503,24 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             _set(ws, r, 17, a['tpp_rev'])
             _set(ws, r, 18, b['tpp_rev'])
             _fml_pct(ws, r, 19, 18, 17)
-            ws.cell(r, 20).value = f'={_gcl(15)}{r}-{_gcl(14)}{r}'   # 總業績差異=O-N(含SA)
-            ws.cell(r, 20).number_format = FMT_INT
-            ws.cell(r, 21).value = f'={_gcl(6)}{r}-{_gcl(5)}{r}'
-            ws.cell(r, 21).number_format = FMT_INT
-            ws.cell(r, 22).value = f'={_gcl(9)}{r}-{_gcl(8)}{r}'
-            ws.cell(r, 22).number_format = FMT_INT
-            ws.cell(r, 23).value = f'={_gcl(12)}{r}-{_gcl(11)}{r}'
-            ws.cell(r, 23).number_format = FMT_INT
-            _fml_rate(ws, r, 24, 5, 14)
-            _fml_rate(ws, r, 25, 6, 15)
-            _fml_rate(ws, r, 26, 8, 14)
-            _fml_rate(ws, r, 27, 9, 15)
-            _set(ws, r, 28, a['coupon_rev'])
-            _set(ws, r, 29, b['coupon_rev'])
-            _fml_pct(ws, r, 30, 29, 28)
-        _total_sums(ws, row_start, [2,3,5,6,8,9,11,12,14,15,17,18,28,29])
+            _fml_rate(ws, r, 20, 5, 14)
+            _fml_rate(ws, r, 21, 6, 15)
+            _fml_rate(ws, r, 22, 8, 14)
+            _fml_rate(ws, r, 23, 9, 15)
+            _fml_rate(ws, r, 24, 11, 14)                             # AC搭售率=AC/總業績(含SA)
+            _fml_rate(ws, r, 25, 12, 15)
+            _set(ws, r, 26, a['coupon_rev'])
+            _set(ws, r, 27, b['coupon_rev'])
+            _fml_pct(ws, r, 28, 27, 26)
+            ws.cell(r, 29).value = f'={_gcl(15)}{r}-{_gcl(14)}{r}'   # 總業績差異=O-N(含SA)
+            ws.cell(r, 29).number_format = FMT_INT
+            ws.cell(r, 30).value = f'={_gcl(6)}{r}-{_gcl(5)}{r}'
+            ws.cell(r, 30).number_format = FMT_INT
+            ws.cell(r, 31).value = f'={_gcl(9)}{r}-{_gcl(8)}{r}'
+            ws.cell(r, 31).number_format = FMT_INT
+            ws.cell(r, 32).value = f'={_gcl(12)}{r}-{_gcl(11)}{r}'
+            ws.cell(r, 32).number_format = FMT_INT
+        _total_sums(ws, row_start, [2,3,5,6,8,9,11,12,14,15,17,18,26,27])
 
     def fill_biz_mo(ws, row_start, pa, pb):
         """月累積版（多兩個手動欄 col2-3）"""
@@ -544,26 +546,28 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
             _set(ws, r, 19, a['tpp_rev'])
             _set(ws, r, 20, b['tpp_rev'])
             _fml_pct(ws, r, 21, 20, 19)
-            ws.cell(r, 22).value = f'={_gcl(17)}{r}-{_gcl(16)}{r}'   # 總業績差異=Q-P(含SA)
-            ws.cell(r, 22).number_format = FMT_INT
-            ws.cell(r, 23).value = f'={_gcl(8)}{r}-{_gcl(7)}{r}'
-            ws.cell(r, 23).number_format = FMT_INT
-            # SA Care差異 = 本月 - 上月 (K-J)
-            ws.cell(r, 24).value = f'={_gcl(11)}{r}-{_gcl(10)}{r}'
-            ws.cell(r, 24).number_format = FMT_INT
-            # AC差異 = 本月 - 上月 (N-M)
-            ws.cell(r, 25).value = f'={_gcl(14)}{r}-{_gcl(13)}{r}'
-            ws.cell(r, 25).number_format = FMT_INT
             # 達成率 = 本月總業績 / 本月目標 (Q/B)
             _fml_rate(ws, r, 3, 17, 2)
-            _fml_rate(ws, r, 26, 7, 16)
-            _fml_rate(ws, r, 27, 8, 17)
-            _fml_rate(ws, r, 28, 10, 16)
-            _fml_rate(ws, r, 29, 11, 17)
-            _set(ws, r, 30, a['coupon_rev'])
-            _set(ws, r, 31, b['coupon_rev'])
-            _fml_pct(ws, r, 32, 31, 30)
-        _total_sums(ws, row_start, [4,5,7,8,10,11,13,14,16,17,19,20,30,31])
+            _fml_rate(ws, r, 22, 7, 16)
+            _fml_rate(ws, r, 23, 8, 17)
+            _fml_rate(ws, r, 24, 10, 16)
+            _fml_rate(ws, r, 25, 11, 17)
+            _fml_rate(ws, r, 26, 13, 16)                             # AC搭售率=AC/總業績(含SA)
+            _fml_rate(ws, r, 27, 14, 17)
+            _set(ws, r, 28, a['coupon_rev'])
+            _set(ws, r, 29, b['coupon_rev'])
+            _fml_pct(ws, r, 30, 29, 28)
+            ws.cell(r, 31).value = f'={_gcl(17)}{r}-{_gcl(16)}{r}'   # 總業績差異=Q-P(含SA)
+            ws.cell(r, 31).number_format = FMT_INT
+            ws.cell(r, 32).value = f'={_gcl(8)}{r}-{_gcl(7)}{r}'
+            ws.cell(r, 32).number_format = FMT_INT
+            # SA Care差異 = 本月 - 上月 (K-J)
+            ws.cell(r, 33).value = f'={_gcl(11)}{r}-{_gcl(10)}{r}'
+            ws.cell(r, 33).number_format = FMT_INT
+            # AC差異 = 本月 - 上月 (N-M)
+            ws.cell(r, 34).value = f'={_gcl(14)}{r}-{_gcl(13)}{r}'
+            ws.cell(r, 34).number_format = FMT_INT
+        _total_sums(ws, row_start, [4,5,7,8,10,11,13,14,16,17,19,20,28,29])
 
     # ── 配件 sheets ──────────────────────────────────────────────
     log('填入配件 sheets…')
@@ -1045,9 +1049,9 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         elif c in {3,6,9,12,15,27}: ws_ly.cell(13,c).value = cy_ymd
     ws_ly.cell(22,1).value = f'{MTD_START.year}\n{mtd_lbl}'
     ws_ly.cell(31,1).value = f'{LYMO_START.year}\n{ly_lbl}'
-    # 第3列右半（3PP搭售率/SA Care搭售率/禮券金額）年份標籤：24/26/28=去年, 25/27/29=今年
-    for c in (24, 26, 28): ws_ly.cell(3, c).value = ly_ymd
-    for c in (25, 27, 29): ws_ly.cell(3, c).value = cy_ymd
+    # 第3列右半（3PP/SA Care/AC搭售率、禮券金額）年份標籤：20/22/24/26=去年, 21/23/25/27=今年
+    for c in (20, 22, 24, 26): ws_ly.cell(3, c).value = ly_ymd
+    for c in (21, 23, 25, 27): ws_ly.cell(3, c).value = cy_ymd
 
     ytd_ly_lbl=f'{_d(YTD_S_LY)}~{_d(YTD_E_LY)}'; ytd_cy_lbl=f'{_d(YTD_S_CY)}~{_d(YTD_E_CY)}'
     for c in range(1, ws_yoy.max_column+1):
@@ -1068,9 +1072,9 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         elif c in {3,6,9,12,15,27}: ws_yoy.cell(13,c).value = ytd_cy_ymd
     ws_yoy.cell(22,1).value = f'{YTD_S_CY.year}\n{ytd_cy_lbl}'
     ws_yoy.cell(31,1).value = f'{YTD_S_LY.year}\n{ytd_ly_lbl}'
-    # 第3列右半（3PP搭售率/SA Care搭售率/禮券金額）年份標籤：24/26/28=去年, 25/27/29=今年
-    for c in (24, 26, 28): ws_yoy.cell(3, c).value = ytd_ly_ymd
-    for c in (25, 27, 29): ws_yoy.cell(3, c).value = ytd_cy_ymd
+    # 第3列右半（3PP/SA Care/AC搭售率、禮券金額）年份標籤：20/22/24/26=去年, 21/23/25/27=今年
+    for c in (20, 22, 24, 26): ws_yoy.cell(3, c).value = ytd_ly_ymd
+    for c in (21, 23, 25, 27): ws_yoy.cell(3, c).value = ytd_cy_ymd
 
     # ── 機種週別台數 ──
     _fill_class_weeks(wb, df_cy, wk_end, log)
@@ -1541,8 +1545,10 @@ def _fill_launch_compare(wb, df_cy, df_ly, lp: dict, sa_prices: dict, log):
     BIZ_ROWS  = {'head': 2, 'sub': 3, 'data': 4, 'total': 4 + len(codes)}
     MISC_ROWS = {'head': _misc_head, 'sub': _misc_head + 1, 'data': _misc_head + 2,
                  'total': _misc_head + 2 + len(codes)}
-    # 我的欄 → 公版欄（業績表多了 AC搭售率 兩欄，樣式借 SA Care 搭售率那兩欄）
-    BIZ_COLS = {**{c: c for c in range(1, 28)}, 28: 26, 29: 27, 30: 28, 31: 29, 32: 30}
+    # 我的欄 → 公版欄（公版差異四欄已移到最後：搭售率 T~Y、禮券 Z~AB、差異 AC~AF）
+    BIZ_COLS = {**{c: c for c in range(1, 20)},
+                20: 29, 21: 30, 22: 31, 23: 32,
+                **{c: c - 4 for c in range(24, 33)}}
     MISC_COLS = {c: c for c in range(1, 28)}
 
     def styled(src_ws, src_r, r, c, src_c, v=None):
