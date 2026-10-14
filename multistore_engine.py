@@ -6,7 +6,7 @@
   - SALE_TYPES = {'銷售', '尾款'}
   - SAcare 用價目表 × 數量；價目表為 0 者（iMac / Mac mini 延長保固）改取 NET
   - 主機台數：類別3=3001 或 認證機品牌（881/885/886/888），SALE_TYPES - 銷退
-  - 成交筆數：所有交易類型各算 1 筆（直接數列數）
+  - 成交筆數：同公司日報 ＝ 銷售單(A)＋訂單出貨(H)－退貨單(E) 張數（posmas），退貨只扣原單同期的
 
 與單店版的差異：
   - 不做 by-店員統計（省去 員工代碼 / 員工名稱 / 等級代碼）
@@ -399,7 +399,38 @@ def load_from_epb(
     })
     df['NET'] = df['銷售金額(含稅)'] + df['銷退金額']
     print(f'    {len(df):,} 筆, 地點: {sorted(df["地點代碼"].unique().tolist())}', flush=True)
+    df.attrs['txn'] = load_txn_from_epb(start_date, end_date, store_codes, org_id)
     return df
+
+
+def load_txn_from_epb(start_date, end_date, store_codes: list[str], org_id: str = '01') -> pd.DataFrame:
+    """成交筆數原料（同公司日報 sellcnt，posmas 單頭）：每店每天 A／H／E 張數，E 另帶原單日期。
+
+    原單日期＝ref_doc_id 第 2 個「-」後 8 碼；期間加總時才判斷要不要扣（見 txn_count）。
+    """
+    end_excl = end_date + timedelta(days=1)
+    shop_in  = ', '.join(f"'{s}'" for s in store_codes)
+    ref_d = "case when trans_type='E' then substr(ref_doc_id, instr(ref_doc_id,'-',1,2)+1, 8) end"
+    sql = (
+        f"select loc_id, to_char(doc_date,'YYYY-MM-DD') d, trans_type tt, {ref_d} ref_d, count(*) n"
+        f" from posmas where org_id = '{org_id}' and loc_id in ({shop_in})"
+        f" and doc_date >= to_date('{start_date.isoformat()}', 'yyyy-mm-dd')"
+        f" and doc_date < to_date('{end_excl.isoformat()}', 'yyyy-mm-dd')"
+        f" and trans_type in ('A','H','E')"
+        f" group by loc_id, to_char(doc_date,'YYYY-MM-DD'), trans_type, {ref_d}"
+    )
+    raw = _run_epb_query(sql)
+    if raw.empty:
+        return pd.DataFrame(columns=['地點代碼', '日期', '交易類型', '原單日期', '張數'])
+    ref = raw['REF_D'].fillna('').astype(str).str[:8]
+    return pd.DataFrame({
+        '地點代碼': raw['LOC_ID'].astype(str).str.strip().str.zfill(3),
+        '日期':     raw['D'].astype(str).str[:10],
+        '交易類型': raw['TT'].astype(str).str.strip(),
+        '原單日期': ref.where(ref.str.isdigit(), '').map(
+            lambda r: f'{r[:4]}-{r[4:6]}-{r[6:8]}' if r else ''),
+        '張數':     pd.to_numeric(raw['N'], errors='coerce').fillna(0).astype(int),
+    })
 
 
 def load_sacare_prices(filepath: str | Path) -> dict[str, float]:
@@ -507,9 +538,18 @@ def mac_host_units_excl_cert(df: pd.DataFrame) -> int:
     return int(sale - ret)
 
 
-def txn_count(df: pd.DataFrame) -> int:
-    """成交筆數 = distinct (單據代碼 × 交易類型) 組合數，對應門市單據分析報表邏輯"""
-    return int(df[['單據代碼', '交易類型']].dropna(subset=['單據代碼']).drop_duplicates().shape[0])
+def txn_count(txn: pd.DataFrame | None, start: date, end: date, store_code: str | None) -> int:
+    """成交筆數（同公司日報）= 銷售單(A)＋訂單出貨(H)－退貨單(E) 張數；
+    退貨只扣原單日期也在本期間內的（退前期賣的單不扣）。訂金(G)／退訂(J)不算。"""
+    if txn is None or txn.empty:
+        return 0
+    lo, hi = start.isoformat(), end.isoformat()
+    t = txn[(txn['日期'] >= lo) & (txn['日期'] <= hi)]
+    if store_code is not None:
+        t = t[t['地點代碼'] == store_code]
+    sales = t.loc[t['交易類型'] != 'E', '張數'].sum()
+    ret = t.loc[(t['交易類型'] == 'E') & (t['原單日期'] >= lo) & (t['原單日期'] <= hi), '張數'].sum()
+    return int(sales - ret)
 
 
 def acpp_units_by_device(df: pd.DataFrame, keyword: str) -> int:
@@ -587,7 +627,7 @@ def calc_store_metrics(df: pd.DataFrame, start: date, end: date,
         'iphone_units':  host_units(d, c4_set=C4_IPHONE_HOST),
         'ipad_units':    host_units(d, c4_set=C4_IPAD_HOST),
         'watch_units':   host_units(d, c4_set=C4_WATCH_HOST),
-        'txn_count':     txn_count(d),
+        'txn_count':     txn_count(df.attrs.get('txn'), start, end, store_code),
         'acpp_mac':      acpp_units_by_device(d, 'mac'),
         'acpp_ipad':     acpp_units_by_device(d, 'ipad'),
         'acpp_iphone':   acpp_units_by_device(d, 'iphone'),
