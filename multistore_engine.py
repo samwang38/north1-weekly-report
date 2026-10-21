@@ -95,22 +95,16 @@ def fiscal_week(d: date) -> tuple[int, int]:
 def fiscal_period(d: date) -> tuple[int, int, int, date, date]:
     """回傳 (財年, 季, 季內第幾週, 季起始日, 季結束日)。
 
-    財年以 52 週（364 天）為單位往前／往後滾動，所以 FISCAL_YEAR_START
-    不再只對 FY26 有效。季 = 13 個「週日～週六」，因此任何一週都完整落在
-    單一季內，不會出現橫跨兩季的週。
-
-    ⚠️ Apple 財年每隔幾年會有一個 53 週的年度，那一年之後用 364 天滾動會
-       偏一週。目前只用在近期週報，先不處理；真要跨到那麼遠時要改成查表。
+    Apple 財年到 9 月最後一個週六為止（fy_end）。季 = 13 個「週日～週六」，
+    53 週的財年（如 FY28）Q1 為 14 週，與 fy_week 同規則；任何一週都完整
+    落在單一季內，不會出現橫跨兩季的週。
     """
-    days = (d - FISCAL_YEAR_START).days
-    fy_idx = days // 364 if days >= 0 else -((-days + 363) // 364)
-    fy_start = FISCAL_YEAR_START + timedelta(days=fy_idx * 364)
-    fy = FISCAL_YEAR_START.year + 1 + fy_idx      # FY26 起算
-    week_idx = (d - fy_start).days // 7           # 0-based，0~51
-    quarter = week_idx // 13 + 1
-    week_in_q = week_idx % 13 + 1
-    q_start = fy_start + timedelta(days=(quarter - 1) * 13 * 7)
-    q_end   = q_start + timedelta(days=13 * 7 - 1)
+    fy, quarter, week_in_q = fy_week(d)
+    week_start = d - timedelta(days=(d.weekday() + 1) % 7)   # 該週週日
+    q_start = week_start - timedelta(days=7 * (week_in_q - 1))
+    fy_start = fy_end(fy - 1) + timedelta(days=1)
+    n_weeks = 14 if quarter == 1 and ((fy_end(fy) - fy_start).days + 1) // 7 == 53 else 13
+    q_end = q_start + timedelta(days=7 * n_weeks - 1)
     return fy, quarter, week_in_q, q_start, q_end
 
 
@@ -316,6 +310,10 @@ def _run_epb_query(sql: str, timeout: int = 300, max_rows: int = 500_000) -> pd.
     )
     if proc.returncode != 0:
         raise RuntimeError(f'EPBReportQuery: {(proc.stderr or proc.stdout).strip()}')
+    # Java 讀到上限會停下但仍正常結束；資料依門市、日期排序，被切掉的是最後的門市與最近的日子
+    if 'MAX_ROWS_REACHED' in (proc.stderr or ''):
+        raise RuntimeError(f'EPB 查詢超過 {max_rows:,} 筆上限，資料會不完整，已中止。'
+                           '請調高 _run_epb_query 的 max_rows。')
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     if not lines:
         return pd.DataFrame()

@@ -14,6 +14,7 @@
   const logBox        = $('logBox');
   const downloadBtn   = $('downloadBtn');
   const downloadInfo  = $('downloadInfo');
+  const downloadWarn  = $('downloadWarn');
   const resetBtn      = $('resetBtn');
   const retryBtn      = $('retryBtn');
   const errorMsg      = $('errorMsg');
@@ -83,6 +84,13 @@
     if (!currentJobId) return;
     try {
       const res  = await fetch(`/api/status?jobId=${currentJobId}`);
+      if (res.status === 404) {
+        // 伺服器重開過（例如產報途中又按了一次啟動），這筆工作已經不在了
+        stopPoll();
+        errorMsg.textContent = '伺服器已重新啟動，這次產生被中斷了，請按「重試」重新產生。';
+        show(errorCard);
+        return;
+      }
       const data = await res.json();
 
       // render only new messages
@@ -98,6 +106,10 @@
         progressBar.style.width = '100%';
         progressLabel.textContent = '完成！';
         downloadInfo.textContent = `週報已產生完成（${data.filename || '北一區週報.xlsx'}）`;
+        // 進度卡會被收起來，警告要留在下載卡上才看得到
+        const warns = msgs.filter(m => m.includes('⚠️'));
+        downloadWarn.textContent = warns.join('\n');
+        downloadWarn.hidden = !warns.length;
         downloadBtn.onclick = () => {
           window.location.href = `/api/download?jobId=${currentJobId}`;
         };

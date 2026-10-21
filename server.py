@@ -51,11 +51,67 @@ def _load_traffic() -> dict:
         return {}
 
 
+_TRAFFIC_LOCK = threading.Lock()   # 插件推送與產報抓取可能同時寫快取
+
+
 def _save_traffic(stores: dict):
     TRAFFIC_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(TRAFFIC_FILE, 'w', encoding='utf-8') as f:
+    # 先寫暫存檔再換名：直接覆寫時，另一邊剛好讀到寫一半的檔會當成空快取，
+    # 合併後寫回就把整份歷史人流蓋掉
+    tmp = TRAFFIC_FILE.with_suffix('.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
         json.dump({'updated': time.strftime('%Y-%m-%d %H:%M:%S'),
                    'stores': stores}, f, ensure_ascii=False)
+    os.replace(tmp, TRAFFIC_FILE)
+
+
+def _merge_traffic(stores: dict):
+    """併入 {storeCode: {'YYYY-MM-DD': visitors}}（同店同日覆寫，保留其他日期）"""
+    with _TRAFFIC_LOCK:
+        cur = _load_traffic()
+        for code, days in stores.items():
+            cur.setdefault(str(code), {}).update({str(d): int(v) for d, v in days.items()})
+        _save_traffic(cur)
+
+
+def _traffic_fetch_starts(stores: dict, codes, start: date, end: date,
+                          refresh_days: int = 14) -> dict:
+    """ShopperTrak 每店從哪天抓起：快取裡第一個缺的日期，或最近 refresh_days 天
+    （近期數字 ShopperTrak 可能還在補，一律重抓），取較早者。
+    店休日 ShopperTrak 會回 0、不會缺列，所以「快取沒有這天」就是真的缺。"""
+    recent = date.today() - timedelta(days=refresh_days)
+    out = {}
+    for code in codes:
+        have = stores.get(code, {})
+        first_missing = next((start + timedelta(days=i)
+                              for i in range((end - start).days + 1)
+                              if (start + timedelta(days=i)).isoformat() not in have), None)
+        out[code] = max(start, min(first_missing or recent, recent))
+    return out
+
+
+_TRAFFIC_PERIOD_LABEL = {'wk': '本週', 'pw': '上週', 'mtd': '本月', 'pm_same': '上月同期',
+                         'lymo': '去年同月', 'ytd_cy': '今年累積', 'ytd_ly': '去年累積'}
+
+
+def _warn_traffic_gaps(stores: dict, periods: dict, log):
+    """有計數器的門市，報表用到的區間缺天數就警告（加總照算 → 人流偏低、提袋率偏高）"""
+    import shoppertrak
+    today = date.today()
+    for code, name in eng.STORES.items():
+        if code not in shoppertrak.SITE_IDS:
+            continue
+        have = stores.get(code, {})
+        gaps = []
+        for p, label in _TRAFFIC_PERIOD_LABEL.items():
+            _df, s, e = periods[p]
+            e = min(e, today - timedelta(days=1))   # 今天還沒過完、延伸到月底的未來日都不算缺
+            n = sum((s + timedelta(days=i)).isoformat() not in have
+                    for i in range((e - s).days + 1))
+            if n:
+                gaps.append(f'{label}缺 {n} 天')
+        if gaps:
+            log(f'⚠️ 人流資料不齊：{name} {"、".join(gaps)}（人流偏低、提袋率偏高）')
 
 
 def _traffic_sum(stores: dict, code: str, start: date, end: date) -> int:
@@ -162,7 +218,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         LYW_END   = wk_end   - timedelta(weeks=52)
 
     # 季累積（QTD）：財年季起始日 ~ 本週結束日。
-    # 季 = 13 個「週日～週六」，任何一週都完整落在單一季內，不會跨季。
+    # 季 = 13 個「週日～週六」（53 週財年的 Q1 為 14 週），任何一週都完整落在單一季內。
     # 刻意不受 use_full_month 影響 —— 那會把還沒發生的日子算進搭售佔比。
     FY, FQ, FQW, QTD_START, _Q_END = eng.fiscal_period(wk_end)
     QTD_END = wk_end
@@ -252,14 +308,14 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         try:
             import shoppertrak
             codes = [c for c in STORE_CODES if c in shoppertrak.SITE_IDS]
+            # 只抓快取缺的日期＋最近兩週（快取齊全時從近 22 個月縮成約 14 天）
+            starts = _traffic_fetch_starts(_load_traffic(), codes, YTD_S_LY, cy_end)
             log('登入 ShopperTrak 抓取來客數…')
             fetched = shoppertrak.fetch_all(codes, YTD_S_LY, cy_end,
-                                            _st_cfg['username'], _st_cfg['password'], log)
+                                            _st_cfg['username'], _st_cfg['password'], log,
+                                            starts=starts)
             if fetched:
-                cur = _load_traffic()
-                for code, days in fetched.items():
-                    cur.setdefault(code, {}).update({str(d): int(v) for d, v in days.items()})
-                _save_traffic(cur)
+                _merge_traffic(fetched)
                 log(f'來客數已更新：{len(fetched)} 店')
         except Exception as e:
             log(f'（來客數自動抓取略過：{e}）')
@@ -273,6 +329,7 @@ def _fill_workbook(wk_end: date, log, use_full_month: bool = False,
         TRAFFIC[period] = {c: _traffic_sum(_traffic, c, s, e) for c in STORE_CODES}
     if _traffic:
         log(f'人流快取：{len(_traffic)} 店有資料')
+        _warn_traffic_gaps(_traffic, PERIODS, log)
     else:
         log('人流快取：無（人流欄留空，可由插件背景推送）')
 
@@ -1987,13 +2044,29 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # suppress request logs
 
+    def _origin_ok(self) -> bool:
+        """只接受：自己的頁面、ShopperTrak 頁上的人流插件、插件背景。
+        沒帶 Origin 的是 curl／Python 等非瀏覽器呼叫，照常放行。"""
+        headers = getattr(self, 'headers', None)   # 請求列格式錯誤時還沒解析 headers
+        origin = headers.get('Origin') if headers else None
+        if not origin:
+            return True
+        port = self.server.server_address[1]
+        return (origin in (f'http://127.0.0.1:{port}', f'http://localhost:{port}',
+                           'https://analytics.shoppertrak.com')
+                or origin.startswith('chrome-extension://'))
+
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        # 允許公開網站（https）對本機（127.0.0.1）的 Private Network Access 預檢
-        self.send_header('Access-Control-Allow-Private-Network', 'true')
+        headers = getattr(self, 'headers', None)
+        origin = headers.get('Origin') if headers else None
+        if origin and self._origin_ok():
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Vary', 'Origin')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+            self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+            # 允許 ShopperTrak（https）對本機（127.0.0.1）的 Private Network Access 預檢
+            self.send_header('Access-Control-Allow-Private-Network', 'true')
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -2093,6 +2166,10 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        # 其他網站可以不經預檢直接送 POST，只拿掉 CORS 標頭擋不住寫入
+        if not self._origin_ok():
+            self.send_json(403, {'error': '不允許的來源'})
+            return
         p = urllib.parse.urlparse(self.path)
         if p.path == '/api/generate':
             custom_periods = None
@@ -2130,12 +2207,7 @@ class Handler(SimpleHTTPRequestHandler):
                 stores  = payload.get('stores', {})
                 if not isinstance(stores, dict):
                     raise ValueError('stores 格式錯誤')
-                # 合併（同店同日覆寫，保留其他日期）
-                cur = _load_traffic()
-                for code, days in stores.items():
-                    cur.setdefault(str(code), {}).update(
-                        {str(d): int(v) for d, v in days.items()})
-                _save_traffic(cur)
+                _merge_traffic(stores)
                 n_days = sum(len(v) for v in stores.values())
             except Exception as e:
                 self.send_json(400, {'error': f'人流資料錯誤: {e}'})

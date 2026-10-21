@@ -229,20 +229,22 @@ def _query_daily(site_id, start: date, end: date, auth, tenant, log):
     return {d.get("day"): int(d.get("traffic") or 0) for d in rows if d.get("day")}
 
 
-def fetch_all(store_codes, start: date, end: date, username, password, log):
-    """登入並抓多店每日來客數，回傳 {storeCode: {date: traffic}}。失敗丟 ShopperTrakError。"""
+def fetch_all(store_codes, start: date, end: date, username, password, log, starts=None):
+    """登入並抓多店每日來客數，回傳 {storeCode: {date: traffic}}。失敗丟 ShopperTrakError。
+    starts={storeCode: date} 可個別指定起日（只補快取缺的部分），沒給的用 start。"""
     auth, tenant = _ensure_token(username, password, log)
     out, failed = {}, []
     for code in store_codes:
         site = SITE_IDS.get(code)
         if not site:
             continue
+        s = (starts or {}).get(code, start)
         try:
             try:
-                days = _query_daily(site, start, end, auth, tenant, log)
+                days = _query_daily(site, s, end, auth, tenant, log)
             except PermissionError:
                 auth, tenant = _ensure_token(username, password, log, force=True)
-                days = _query_daily(site, start, end, auth, tenant, log)
+                days = _query_daily(site, s, end, auth, tenant, log)
             if days:
                 out[code] = days
                 log(f"  來客數 {code}: {len(days)} 天")

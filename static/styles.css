@@ -144,6 +144,17 @@ h1 { font-size: 24px; font-weight: 700; }
   white-space: pre-wrap;
 }
 
+.warn-msg {
+  font-size: 13px;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+}
+
 /* 自訂日期區間 */
 .custom-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
 .custom-grid .cp-row { display: grid; grid-template-columns: 110px 1fr auto 1fr; align-items: center; gap: 8px; }
