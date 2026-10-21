@@ -86,9 +86,14 @@ if [ -n "$OLD" ]; then
   sleep 1
 fi
 
-# ── 順便用 Chrome 打開 ShopperTrak（插件只在 Chrome 運作）+ 週報網頁 ──
-echo "用 Chrome 開啟 ShopperTrak 與週報網頁…"
-open -a "Google Chrome" "https://analytics.shoppertrak.com/" 2>/dev/null
+# ── 用 Chrome 打開週報網頁；沒設 ShopperTrak 帳密才順便開 ShopperTrak（給人流插件用）──
+# 有帳密時產報會自動登入抓來客數，不需要 ShopperTrak 分頁
+if "$PY" -c "import json,sys; s=json.load(open('local_config.json')).get('shoppertrak',{}); sys.exit(0 if s.get('username') and s.get('password') else 1)" 2>/dev/null; then
+  echo "用 Chrome 開啟週報網頁…（已設 ShopperTrak 帳密，產報時自動抓來客數）"
+else
+  echo "用 Chrome 開啟 ShopperTrak 與週報網頁…"
+  open -a "Google Chrome" "https://analytics.shoppertrak.com/" 2>/dev/null
+fi
 ( sleep 2 && open -a "Google Chrome" "http://127.0.0.1:8782/" ) &
 
 echo "啟動伺服器（port 8782）…"
