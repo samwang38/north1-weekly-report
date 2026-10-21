@@ -6,11 +6,15 @@ echo ""
 # ── 自動更新 ──────────────────────────────────────────────────
 if command -v git &>/dev/null && [ -d ".git" ]; then
   echo "檢查更新中…"
-  if git pull --quiet 2>/dev/null; then
+  # 限時 10 秒：資料夾在 iCloud，.git 檔案若被卸載成雲端佔位檔，git 會卡著等下載
+  git pull --quiet 2>/dev/null & GP=$!
+  ( sleep 10; kill $GP 2>/dev/null ) & WD=$!
+  if wait $GP 2>/dev/null; then
     echo "已是最新版本。"
   else
     echo "（無法連線更新，繼續使用現有版本）"
   fi
+  kill $WD 2>/dev/null
   echo ""
 fi
 
